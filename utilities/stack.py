@@ -1,6 +1,6 @@
-"""Bring up what `make up` promises: the module resource and the workload operator.
+"""Bring up what `k8s-tests up` promises: the module resource and the workload operator.
 
-`make deploy` runs this once it has deployed the module operator, so what `make up`
+`k8s-tests deploy` runs this once it has deployed the module operator, so what `up`
 leaves behind is what the checks expect to find: the `TrustyAI` module resource,
 reconciled, and the workload operator Deployment the module operator deploys from
 it - running the images this run asked for, with the operand CRDs' conversion

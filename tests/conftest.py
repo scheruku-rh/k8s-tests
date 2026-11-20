@@ -72,7 +72,7 @@ from utilities.trustyai_service import SERVICE_NAME, ServiceAddress, service_env
 
 LOGGER = logging.getLogger(__name__)
 
-# Set by `make test TRUSTYAI_SERVICE_IMG=...`: the operand image the operator was
+# Set by `k8s-tests test --trustyai-service-img ...`: the operand image the operator was
 # told to deploy, which the checks then confirm the Deployment actually runs.
 SERVICE_IMG_VAR = "TRUSTYAI_SERVICE_IMG"
 
@@ -110,10 +110,10 @@ def trustyai_module(
 ) -> Iterator[dict[str, Any] | None]:
     """Ensure the module resource the module operator reconciles is there, and wait for the stack under it.
 
-    The harness ships no manifest for it: `make deploy` applies the resource through
+    The harness ships no manifest for it: `k8s-tests deploy` applies the resource through
     `utilities.stack`, and a cluster brought up another way gets it created here,
     the way a user would, and removed again unless the run keeps its resources. A
-    resource that is already there - the one `make deploy` created, a
+    resource that is already there - the one `k8s-tests deploy` created, a
     platform-managed install, or a Kind cluster a KEEP_RESOURCES run left populated -
     is never rewritten and never deleted by this session.
 

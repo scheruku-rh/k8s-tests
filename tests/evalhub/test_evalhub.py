@@ -207,7 +207,7 @@ def test_evalhub_runs_the_image_the_workload_operator_passes(
 def test_evalhub_runs_the_requested_image(
     apps_client: client.AppsV1Api, evalhub_instance: dict[str, Any], evalhub_instance_namespace: str
 ) -> None:
-    """`make up EVALHUB_IMG=...` reaches the instances the tests create."""
+    """`k8s-tests up --evalhub-img ...` reaches the instances the tests create."""
     expected = expected_image_from_env(EVALHUB_IMAGE_VAR)
     if expected is None:
         pytest.skip(f"{EVALHUB_IMAGE_VAR} is not set, so no EvalHub image was requested for this run")

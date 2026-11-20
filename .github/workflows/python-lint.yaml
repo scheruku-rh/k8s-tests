@@ -32,4 +32,4 @@ jobs:
         run: uv sync --frozen
 
       - name: Lint
-        run: make lint
+        run: uv run k8s-tests lint

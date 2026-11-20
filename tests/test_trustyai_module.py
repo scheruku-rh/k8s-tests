@@ -3,7 +3,7 @@
 The module CRD, both operator Deployments, the singleton TrustyAI resource and
 the module operator image, all read through the Kubernetes Python client.
 
-There is no manifest for the module resource: `make deploy` applies it through
+There is no manifest for the module resource: `k8s-tests deploy` applies it through
 `utilities.stack`, and the `trustyai_module` fixture creates it when a cluster has
 none, then waits for the workload operator the module operator deploys.
 
@@ -83,7 +83,7 @@ def test_trustyai_module_cr_ready(dynamic_client: DynamicClient, api_client: cli
 
 
 def test_module_operator_runs_the_built_image(apps_client: client.AppsV1Api, namespace: str) -> None:
-    """The module operator runs the image the harness built, when the run came through `make test`."""
+    """The module operator runs the image the harness built, when the run came through `k8s-tests test`."""
     expected = expected_image_from_env(MODULE_IMAGE_VAR)
     if expected is None:
         pytest.skip(f"{MODULE_IMAGE_VAR} is not set, so there is no built image to compare against")

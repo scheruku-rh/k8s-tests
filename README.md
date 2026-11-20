@@ -6,201 +6,202 @@ Kubernetes-level tests and harnesses for the TrustyAI components.
 
 ## Local Kind harness
 
-`Makefile` brings up a local [Kind](https://kind.sigs.k8s.io/) cluster and runs
-the TrustyAI module and workload operators on it: it builds both operator images
-from a `trustyai-service-operator` checkout, loads them into the cluster, and
-deploys the module operator with its image values overridden to the images it
-just built. The module operator then renders and deploys the workload operator
-from the manifests baked into its image.
+`k8s-tests` brings up a local [Kind](https://kind.sigs.k8s.io/) cluster and runs the
+TrustyAI module and workload operators on it: it builds both operator images from a
+`trustyai-service-operator` checkout, loads them into the cluster, and deploys the
+module operator with its image values overridden to the images it just built. The
+module operator then renders and deploys the workload operator from the manifests
+baked into its image.
 
-The harness stops at the operators: `make up` also creates the `TrustyAI` module
-resource, which makes the module operator deploy the workload operator, and waits
-until both are running the images it built. The resource is built in Python rather
-than from a manifest, so no YAML in this repository has to be kept in step with the
-operator. What the checks then look at - `TrustyAIService`, `EvalHub` instances, the
-jobs that call a model - is created by the suite, the way a user would, so the
-operand lifecycle is under test.
+The harness stops at the operators: `up` also creates the `TrustyAI` module resource,
+which makes the module operator deploy the workload operator, and waits until both run
+the images it built. The resource is built in Python rather than from a manifest, so no
+YAML here has to be kept in step with the operator. What the checks then look at -
+`TrustyAIService`, `EvalHub` instances, the jobs that call a model - is created by the
+suite, the way a user would, so the operand lifecycle is under test.
+
+The harness is a Python package with a console script; there is no shell script left in
+it. Every knob is a flag and an environment variable of the same name, so
+`k8s-tests up --operator-repo X` and `OPERATOR_REPO=X k8s-tests up` are the same run, and
+`k8s-tests --help` documents both spellings. The `Makefile` only forwards
+`make <target>` to the CLI for muscle memory.
 
 ### Prerequisites
 
-- `kind` and `kubectl` 1.24 or newer, which the checks need to mint bearer
-  tokens with `kubectl create token`
+- `kind` and `kubectl` 1.24 or newer, which the checks need to mint bearer tokens with
+  `kubectl create token`
 - `podman` or `docker` to build the images
 - `uv`, which resolves the pinned Python 3.11+ dependencies from `uv.lock` for
-  `make deploy`, `make test`, `make test-evalhub-adapters`, `make lint` and
-  `make fmt`
-- `python3` with the [`cryptography`][cryptography] package, which `make deploy`
-  runs `hack/gen-certs.py` with to create the TLS secrets Kind does not issue
-- a `trustyai-service-operator` checkout, passed as `OPERATOR_REPO`
-
-[cryptography]: https://cryptography.io/
+  `uv run k8s-tests ...`
+- a `trustyai-service-operator` checkout, passed as `--operator-repo`/`OPERATOR_REPO`.
+  The TLS secrets Kind cannot issue are generated in-process (`cryptography` is a
+  dependency)
 
 ### Quick start
 
 ```sh
-make up OPERATOR_REPO=/path/to/trustyai-service-operator
-make status     # both operators, and no operands
-make test       # creates the operands and checks them
+k8s-tests up --operator-repo /path/to/trustyai-service-operator
+k8s-tests status     # both operators, and no operands
+k8s-tests test       # creates the operands and checks them
 ```
 
-`make up` is the four steps below, run in order; each is also usable on its own:
+From a checkout, prefix with `uv run` (`uv run k8s-tests up ...`). `up` is the four
+steps below, run in order; each is usable on its own:
 
 ```sh
-make cluster    # create the Kind cluster (idempotent)
-make images     # build the workload and module operator images from OPERATOR_REPO
-make load       # load both images into the cluster
-make deploy     # deploy the module operator, pointing it at the built images
+k8s-tests cluster    # create the Kind cluster (idempotent)
+k8s-tests images     # build the workload and module operator images from OPERATOR_REPO
+k8s-tests load       # load both images into the cluster
+k8s-tests deploy     # deploy the module operator, pointing it at the built images
 ```
 
-`up`, `images` and `deploy` require `OPERATOR_REPO` and stop with a pointer to
-the flag when it is missing or does not look like an operator checkout.
+`up`, `images`, `images-all` and `deploy` require `OPERATOR_REPO` and stop with a pointer
+to the flag when it is missing or does not look like an operator checkout.
 
-Tear the cluster down with `make down`; `make clean` also deletes the images
-the harness built, the local registry container `make images-all` starts, and the
-HTML reports (`reports/`, the `images.env` record of what was deployed included),
-without touching the cluster. With podman or Docker stopped it still removes the
-reports and leaves the images and the registry for a later run.
+Tear the cluster down with `k8s-tests down`. `k8s-tests clean` also deletes the images
+the harness built, the local registry container `images-all` starts, and the HTML
+reports (`reports/`, the `images.env` record included), without touching the cluster.
+With podman or Docker stopped it still removes the reports and leaves the images and the
+registry for a later run.
+
+### Installing it
+
+```sh
+uv pip install .                 # into the active environment
+uv tool install .                # or as a standalone command
+k8s-tests test --section lmeval
+```
+
+The wheel carries the checks and their assets (`harness/data/`), so an installed copy
+runs the whole suite from any directory, against whatever cluster `KUBE_CONTEXT` and
+`NAMESPACE` name. `-v` reports which copy a run reads: the checkout when there is one,
+the installed one otherwise. `lint` and `fmt` act on a checkout and need
+`K8S_TESTS_ROOT=/path/to/k8s-tests` when the installation has none.
 
 ### Building every image locally (local registry)
 
-`make images-all` builds every image the suite can build from source and pushes
-it to a `registry:2` container on `127.0.0.1:$(REGISTRY_PORT)` (5005). The Kind
-nodes pull from that registry through a containerd mirror, so nothing has to be
-loaded into the node. It builds:
+`k8s-tests images-all` builds every image the suite can build from source and pushes it
+to a `registry:2` container on `127.0.0.1:$REGISTRY_PORT` (5005). The Kind nodes pull
+from it through a containerd mirror, so nothing is loaded into the node. It builds:
 
 - the workload and module operator images from `OPERATOR_REPO`;
 - the EvalHub service image from `EVALHUB_REPO`;
-- every adapter image from `EVALHUB_CONTRIB_REPO` (`ADAPTERS=all`), or only the
-  adapters named in `ADAPTERS`;
+- every adapter image from `EVALHUB_CONTRIB_REPO` (`ADAPTERS=all`), or only those named;
 - the `lm_evaluation_harness` adapter the adapter checks use, from
   `LMES_REPO/Dockerfile.lmes-job`.
 
-The three new repositories default to siblings of this checkout
-(`../eval-hub`, `../eval-hub-contrib`, `../lm-evaluation-harness`).
+The three repositories default to siblings of this checkout (`../eval-hub`,
+`../eval-hub-contrib`, `../lm-evaluation-harness`).
 
 ```sh
-# Build and push everything, then deploy the stack with those images
-make images-all OPERATOR_REPO=/path/to/trustyai-service-operator
-make deploy-registry OPERATOR_REPO=/path/to/trustyai-service-operator
+# Build and push everything, then deploy with those images
+k8s-tests images-all --operator-repo /path/to/trustyai-service-operator
+k8s-tests deploy-registry --operator-repo /path/to/trustyai-service-operator
 
 # Or in one step: cluster + images-all + deploy-registry
-make up-registry OPERATOR_REPO=/path/to/trustyai-service-operator
+k8s-tests up-registry --operator-repo /path/to/trustyai-service-operator
 
-# Only the adapter the adapter checks need (much faster than ADAPTERS=all)
-make up-registry OPERATOR_REPO=/path/to/trustyai-service-operator ADAPTERS=lmes
+# Only the adapter the adapter checks need (much faster than --adapters all)
+k8s-tests up-registry --operator-repo /path/to/trustyai-service-operator --adapters lmes
 ```
 
-`ADAPTERS=all` is the default and builds every eval-hub-contrib adapter plus
-`community-lmes`; several of them are large (the GuideLLM image alone is about
-7.5 GB), so `ADAPTERS=lmes` or a list of adapter directory names is the quick
-path. `images-all` writes the resulting references to `reports/images.env` and
-`deploy-registry` passes them to `make deploy`, which drops the references it
-does not use and marks the file as a record of what is running. The checks read
-that file when the image variables are not set, so `make test` after a registry
-deploy compares against the images that were pushed - and images that were built
-but never deployed do not make it compare against anything.
+`--adapters all` is the default and builds every eval-hub-contrib adapter plus
+`community-lmes`; several are large (GuideLLM alone is about 7.5 GB), so `--adapters
+lmes` or a list of adapter directory names is the quick path. `images-all` writes the
+references to `reports/images.env`; `deploy-registry` reads them, drops the ones it does
+not use, and marks the file as a record of what is running. The checks read that file
+when the image variables are not set, so `k8s-tests test` after a registry deploy
+compares against the images that were pushed - and an image that was built but never
+deployed makes it compare against nothing.
 
-`deploy-registry` and `up-registry` accept the same image variables as
-`deploy`/`up` (`WORKLOAD_IMG`, `MODULE_IMG`, `EVALHUB_IMG`,
-`TRUSTYAI_SERVICE_IMG`, `KUBE_RBAC_PROXY_IMG`, `LMES_IMG`, `INSPECT_IMG`,
-`LIGHTEVAL_IMG`). A value
-passed on the command line wins over the one recorded in `reports/images.env`,
-the same way `make up ... TRUSTYAI_SERVICE_IMG=<image>` overrides the operator's
-pin, and the references the deploy does not use are dropped from the file so the
-checks keep comparing against the ones it does.
+`deploy-registry` and `up-registry` accept the same image flags as `deploy`/`up`. A flag
+or variable given there wins over the record, and the references the deploy does not use
+are dropped from the file so the checks keep comparing against the ones it does.
 
 How the images reach the cluster:
 
-- `hack/build-all-images.sh` starts the registry on the `kind` container network,
-  publishes it on `127.0.0.1:$(REGISTRY_PORT)`, and writes
-  `/etc/containerd/certs.d/localhost:$(REGISTRY_PORT)/hosts.toml` on every node.
-  Pods that reference `localhost:$(REGISTRY_PORT)/...` pull from it over HTTP.
-- New clusters get the certs.d config path from `hack/kind/cluster.yaml`. A
-  cluster created before that patch has it enabled in place; set
-  `PATCH_CONTAINERD=false` to fail instead and recreate the cluster with
-  `make down`.
-- The build engine is the one that owns the Kind cluster (the cluster's node
-  containers decide it, and `KIND_PROVIDER` overrides that); with no cluster yet
-  podman is preferred. podman pushes to the plain-HTTP registry with
-  `--tls-verify=false`. With Docker, the daemon must allow the local registry
-  (`insecure-registries`) or the push fails with `server gave HTTP response to
-  HTTPS client`.
-- The registry container is reused between runs; `make clean` removes it, so
-  everything it held is gone - including an image you pushed to it by hand, such
-  as the kube-rbac-proxy build in Troubleshooting, which has to be pushed again
-  before the next `deploy`. It also removes the local copies of the images
-  `reports/images.env` records, and leaves the images under the registry prefix
-  that the file does not record in the engine's store alone. With podman or
-  Docker stopped it still removes `reports/` and leaves the images and the
-  registry for a later run.
-- On a small podman machine the adapter images fill the VM quickly. Pass
-  `REMOVE_AFTER_PUSH=true` to `images-all` to drop each local copy once it is
-  pushed (the registry keeps it), and prefer `ADAPTERS=lmes` over `ADAPTERS=all`
-  unless you have room for the heavy adapters (GuideLLM is ~7.5 GB, LightEval
-  and MTEB are larger).
+- `images-all` starts the registry on the `kind` container network, publishes it on
+  `127.0.0.1:$REGISTRY_PORT`, and writes
+  `/etc/containerd/certs.d/localhost:$REGISTRY_PORT/hosts.toml` on every node. Pods that
+  reference `localhost:$REGISTRY_PORT/...` pull from it over HTTP.
+- New clusters get the certs.d config path from `hack/kind/cluster.yaml`. A cluster
+  created before that patch has it enabled in place; `--patch-containerd 0` fails
+  instead, and asks for a recreated cluster (`k8s-tests down`).
+- The build engine is the one that owns the Kind cluster (its node containers decide,
+  and `KIND_PROVIDER` overrides that); with no cluster yet podman is preferred. podman
+  pushes to the plain-HTTP registry with `--tls-verify=false`. With Docker the daemon
+  must allow the local registry (`insecure-registries`) or the push fails with `server
+  gave HTTP response to HTTPS client`.
+- The registry container is reused between runs; `clean` removes it, so everything it
+  held is gone - including an image pushed by hand, such as the kube-rbac-proxy build in
+  Troubleshooting, which has to be pushed again before the next `deploy`. It also
+  removes the local copies the record names, and leaves images under the registry prefix
+  that the record does not name alone.
+- On a small podman machine the adapter images fill the VM quickly. `--remove-after-push`
+  drops each local copy once it is pushed (the registry keeps it), and `--adapters lmes`
+  is cheaper than all of them (GuideLLM is ~7.5 GB; LightEval and MTEB are larger).
 
-### What `make deploy` does
+### What `k8s-tests deploy` does
 
 1. Creates the target namespace (`system` by default).
 2. Applies the external CRD stand-ins the operators expect, copied from
    `$OPERATOR_REPO/tests/crds`: OpenShift `Route`, Prometheus Operator
    `Prometheus`/`ServiceMonitor`, and KServe `InferenceService`.
-3. Renders `$OPERATOR_REPO/trustyai-operator-module/config/default` from a
-   temporary copy, so the module operator image, the workload operator image it
-   renders (`RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_OPERATOR_IMAGE`), the EvalHub
-   image the workload operator resolves (`RELATED_IMAGE_ODH_EVAL_HUB_IMAGE`,
-   when `EVALHUB_IMG` is set) and the namespace are all overridden without
-   touching the checkout.
-4. Waits for the module operator to come up, seeds the `Prometheus` instance it
-   expects, and creates the webhook and metrics TLS secrets that OpenShift's
-   service CA would normally issue (Kind has no service CA).
-5. Applies the `TrustyAI` module resource from `utilities/stack.py`, which builds
-   it in Python - there is no manifest - and waits for the workload operator the
-   module operator deploys from it: the Deployment, the image it runs and the
-   `RELATED_IMAGE_*` values it resolves, and its rollout.
-6. Points the `TrustyAIService` and `EvalHub` CRD conversion webhooks at the seeded
-   CA, which OpenShift's service CA would fill in.
+3. Renders `$OPERATOR_REPO/trustyai-operator-module/config/default` from a temporary
+   copy, so the module operator image, the workload operator image it renders
+   (`RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_OPERATOR_IMAGE`), the operand images the
+   workload operator resolves (`RELATED_IMAGE_ODH_*`, from `--evalhub-img`,
+   `--trustyai-service-img`, `--kube-rbac-proxy-img`, `--lmes-img`, `--inspect-img`,
+   `--lighteval-img`) and the namespace are overridden without touching the checkout.
+4. Waits for the module operator to come up, seeds the `Prometheus` instance it expects,
+   and creates the webhook and metrics TLS secrets that OpenShift's service CA would
+   normally issue (Kind has no service CA).
+5. Applies the `TrustyAI` module resource through `utilities/stack.py`, which builds it
+   in Python - there is no manifest - and waits for the workload operator the module
+   operator deploys from it: the Deployment, the image it runs and the `RELATED_IMAGE_*`
+   values it resolves, and its rollout.
+6. Points the `TrustyAIService` and `EvalHub` CRD conversion webhooks at the seeded CA.
 
-That is where the harness stops: both operators run, with the images this run asked
-for, and nothing is reconciled on top of them. `make status` right after `make up`
-shows the two operators and no operands.
+That is where the harness stops: both operators run, with the images this run asked for,
+and nothing is reconciled on top of them. `k8s-tests status` right after `up` shows the
+two operators and no operands.
 
 ### The module resource and the operands
 
 The module resource is built by `utilities/trustyai.py:module_manifest`:
 `default-trustyai`, `managementState: Managed`, with TAS, LMES, EvalHub and NeMo
-Guardrails enabled. `make deploy` applies it through `utilities/stack.py`; the
-`trustyai_module` fixture in `tests/conftest.py` then adopts it rather than
-rewriting it, and only creates it when the cluster has none - a cluster brought up
-without `make deploy`, which is also the only case where the session deletes it
-again (unless `KEEP_RESOURCES` is set). A resource that is already there, on a
-platform-managed install for instance, is never touched.
+Guardrails enabled. `k8s-tests deploy` applies it through `utilities/stack.py`; the
+`trustyai_module` fixture in `tests/conftest.py` then adopts it rather than rewriting it,
+and only creates it when the cluster has none - a cluster brought up without `deploy`,
+which is also the only case where the session deletes it again (unless `KEEP_RESOURCES`
+is set). A resource that is already there, on a platform-managed install for instance,
+is never touched.
 
-Those four are the harness's *capability*, not a list of what is covered: the
-module resource is a cluster-scoped singleton whose `enabledServices` becomes the
-workload operator's `--enable-services` argument, with every controller in that one
-manager process, so a service can only be switched on here. All four are on so a
-check can create whatever operand it needs, in a namespace of its own - the way
-`opendatahub-tests` does - rather than because a check exists for each today.
+Those four are the harness's *capability*, not a list of what is covered: the module
+resource is a cluster-scoped singleton whose `enabledServices` becomes the workload
+operator's `--enable-services` argument, with every controller in that one manager
+process, so a service can only be switched on here. All four are on so a check can create
+whatever operand it needs, in a namespace of its own - the way `opendatahub-tests` does -
+rather than because a check exists for each today.
 
 Everything on top of the operators is created by the suite, the way a user or the
 platform operator would, so there is no manifest for any of it:
 
-- an `EvalHub` instance with its namespace and TLS material, and a
-  `TrustyAIService`, each in its own namespace from a fixture in `tests/conftest.py`;
-- the LLM emulator, or the model credential Secret when `MODEL_URL`/`MODEL_KEY`
-  name a real endpoint, and the resources a job needs in its tenant namespace.
+- an `EvalHub` instance with its namespace and TLS material, and a `TrustyAIService`,
+  each in its own namespace from a fixture in `tests/conftest.py`;
+- the LLM emulator, or the model credential Secret when `MODEL_URL`/`MODEL_KEY` name a
+  real endpoint, and the resources a job needs in its tenant namespace.
 
-The fixtures depend on `trustyai_module`, so no operand is created before the
-workload operator that reconciles it is up; the fixture repeats the waits
-`utilities/stack.py` does, which is what makes a bare `make test` - without a fresh
-`make deploy` - wait for a stack someone else brought up instead of racing it.
+The fixtures depend on `trustyai_module`, so no operand is created before the workload
+operator that reconciles it is up; the fixture repeats the waits `utilities/stack.py`
+does, which is what makes a bare `k8s-tests test` - without a fresh `deploy` - wait for a
+stack someone else brought up instead of racing it.
 
 ### Bringing a workload of your own
 
-The operators are the session's, a workload is the check's. Three fixtures make that
-the default shape of a new section, and each removes what it created when the check
-that asked for it finishes:
+The operators are the session's, a workload is the check's. Three fixtures make that the
+default shape of a new section, and each removes what it created when the check that
+asked for it finishes:
 
 | Fixture | Gives you |
 | --- | --- |
@@ -208,8 +209,8 @@ that asked for it finishes:
 | `trustyai_services(request)` | a `TrustyAIService` in a namespace of its own, waited for, with port-forwards to its API (pass `namespace=` to reuse one) |
 | `evalhub_tenants(request)` | a tenant-labelled namespace for an EvalHub job |
 
-So a section that needs its own copy of something asks for one, in its own
-namespace, instead of sharing the session's:
+So a section that needs its own copy of something asks for one, in its own namespace,
+instead of sharing the session's:
 
 ```python
 @pytest.fixture(scope="module")
@@ -239,15 +240,17 @@ def test_an_lmeval_job(request: pytest.FixtureRequest, workload_namespaces, cust
 
 A second `TrustyAIService` does not collide with the first: the forwards ask
 `utilities/portforward.py` for a free port pair, starting at
-`TRUSTYAI_SERVICE_API_PORT`/`TRUSTYAI_SERVICE_HEALTH_PORT` (18443/18080), and give
-them back at teardown. What a check cannot have of its own is a service that is not
-enabled on the module resource: `enabledServices` is the one cluster-wide switch, so
-`LMEvalJob`, `EvalHub` and guardrails workloads work because all four are on. The
-`LMEvalJob` shape above is the operator's own sample
-(`config/samples/lmes_v1alpha1_lmevaljob_dra.yaml`), minus the DRA resource claim;
-a marker of your own belongs in `pyproject.toml` next to the others.
+`TRUSTYAI_SERVICE_API_PORT`/`TRUSTYAI_SERVICE_HEALTH_PORT` (18443/18080), and give them
+back at teardown. What a check cannot have of its own is a service that is not enabled on
+the module resource: `enabledServices` is the one cluster-wide switch, so `LMEvalJob`,
+`EvalHub` and guardrails workloads work because all four are on. The `LMEvalJob` shape
+above is the operator's own sample (`config/samples/lmes_v1alpha1_lmevaljob_dra.yaml`),
+minus the DRA resource claim; a marker of your own belongs in `pyproject.toml` next to
+the others.
 
-### Variables
+### Settings
+
+Every one is a flag and an environment variable; `k8s-tests --help` lists them all.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -275,13 +278,14 @@ a marker of your own belongs in `pyproject.toml` next to the others.
 | `LMES_IMG` / `INSPECT_IMG` / `LIGHTEVAL_IMG` | *(empty)* | Adapter image overrides passed through the module operator (`RELATED_IMAGE_ODH_*`) |
 | `PLATFORM` | engine host platform | Platform the images are built for (`linux/arm64` on Apple Silicon) |
 | `IMAGES_ENV_FILE` | `reports/images.env` | Where `images-all` writes the image references and `deploy` and the checks read them |
-| `REMOVE_AFTER_PUSH` | *(empty)* | `images-all` removes each local image after pushing it; frees the podman machine's disk (incompatible with `SKIP_BUILD=true`) |
-| `PATCH_CONTAINERD` | `true` | Enable the certs.d config path in place on a cluster created before `hack/kind/cluster.yaml` had it |
+| `REMOVE_AFTER_PUSH` | *(empty)* | `images-all` removes each local image after pushing it; frees the podman machine's disk (incompatible with `SKIP_BUILD`) |
+| `SKIP_BUILD` | *(empty)* | `images-all` pushes the images already in the engine's store |
+| `PATCH_CONTAINERD` | `1` | Enable the certs.d config path in place on a cluster created before `hack/kind/cluster.yaml` had it |
 | `ENGINE` | auto | The engine that owns the Kind cluster (podman when there is no cluster yet); set it to force one |
 | `TIMEOUT` | `300s` | Timeout for each readiness wait |
 | `PYTEST_ARGS` | *(empty)* | Extra pytest arguments, e.g. `-m module`, `-m lmeval`, `-m adapters` or `-k evalhub` |
-| `REPORT_FILE` | `reports/report.html` | Report written by `make test` and `make test-all` |
-| `ADAPTERS_REPORT_FILE` | `reports/adapters.html` | Report written by `make test-evalhub-adapters` |
+| `REPORT_FILE` | `reports/report.html` | Report written by `k8s-tests test` (default and `--section all`) |
+| `ADAPTERS_REPORT_FILE` | `reports/adapters.html` | Report written by `--section adapters` |
 | `KEEP_RESOURCES` | *(empty)* | Leave everything the run created on the cluster: see [Keeping the resources](#keeping-the-resources) |
 
 The LLM emulator's `EMULATOR_IMG`, `EMULATOR_NAMESPACE` and `EMULATOR_TOKEN` are
@@ -289,50 +293,47 @@ documented under [LLM emulator](#llm-emulator).
 
 ### Notes and troubleshooting
 
-- `make images-all` needs the local registry to be reachable from the nodes. If
-  a pod stays in `ImagePullBackOff` for a `localhost:$(REGISTRY_PORT)/...` image,
-  check `curl http://127.0.0.1:$(REGISTRY_PORT)/v2/_catalog`, that the
+- `images-all` needs the local registry to be reachable from the nodes. If a pod stays in
+  `ImagePullBackOff` for a `localhost:$REGISTRY_PORT/...` image, check
+  `curl http://127.0.0.1:$REGISTRY_PORT/v2/_catalog`, that the
   `k8s-tests-registry-<cluster>` container is running, and that
-  `/etc/containerd/certs.d/localhost:$(REGISTRY_PORT)/hosts.toml` exists in the
-  node (`podman exec <node> cat ...`).
-- With Docker as the engine, pushing to the plain-HTTP registry fails with
-  `server gave HTTP response to HTTPS client` unless the daemon lists it under
-  `insecure-registries`. The engine follows the cluster's provider, so a
-  podman-backed cluster (`KIND_PROVIDER=podman`) is the way to use podman's push
-  path; `ENGINE=podman` overrides the build engine when both are installed.
-- Creating a new Kind cluster on a rootless podman machine needs
-  `Delegate=yes` in the machine's systemd user slice (see the
+  `/etc/containerd/certs.d/localhost:$REGISTRY_PORT/hosts.toml` exists in the node
+  (`podman exec <node> cat ...`).
+- With Docker as the engine, pushing to the plain-HTTP registry fails with `server gave
+  HTTP response to HTTPS client` unless the daemon lists it under
+  `insecure-registries`. The engine follows the cluster's provider, so a podman-backed
+  cluster (`KIND_PROVIDER=podman`) is the way to use podman's push path; `ENGINE=podman`
+  overrides the build engine when both are installed.
+- Creating a new Kind cluster on a rootless podman machine needs `Delegate=yes` in the
+  machine's systemd user slice (see the
   [kind rootless documentation](https://kind.sigs.k8s.io/docs/user/rootless/)).
-  `images-all` can enable the containerd registry config path on an existing
-  cluster in place, so a cluster created before `hack/kind/cluster.yaml` had the
-  patch still works.
-- A build that fails with `no space left on device` is the podman machine's own
-  disk, not the Mac's. Check it with `podman system df` and
-  `podman machine ssh 'df -h /'`. `podman image prune -a -f` and
-  `podman builder prune -f` reclaim unused images and build cache,
-  `kind delete cluster --name <old-cluster>` frees the volumes of a cluster you
-  no longer need, and `podman machine set --disk-size 300` grows the disk (it
-  stops the machine first, so the clusters stop too).
-
-- `make up` leaves both operators running and no operands, so `make status` shows
-  the module operator, the workload operator and no `EvalHub` instance. If the
-  workload operator never appears, the module operator could not reconcile the
-  module resource: `make logs` tails the module operator, and
+  `images-all` can enable the containerd registry config path on an existing cluster in
+  place, so a cluster created before `hack/kind/cluster.yaml` had the patch still works.
+- A build that fails with `no space left on device` is the podman machine's own disk, not
+  the Mac's. Check it with `podman system df` and `podman machine ssh 'df -h /'`.
+  `podman image prune -a -f` and `podman builder prune -f` reclaim unused images and
+  build cache, `kind delete cluster --name <old-cluster>` frees the volumes of a cluster
+  you no longer need, and `podman machine set --disk-size 300` grows the disk (it stops
+  the machine first, so the clusters stop too).
+- `up` leaves both operators running and no operands, so `status` shows the module
+  operator, the workload operator and no `EvalHub` instance. If the workload operator
+  never appears, the module operator could not reconcile the module resource: `logs`
+  tails the module operator, and
   `kubectl get trustyais.components.platform.opendatahub.io default-trustyai -o yaml`
   shows the conditions it reported.
-- `make deploy` converges the module resource on the services the harness needs, so
-  re-running it resets one that was edited by hand. A test session never does that:
-  it adopts the resource it finds.
-- Image tags other than `latest` are important: `latest` would make Kubernetes
-  pull instead of using the image loaded into the node.
+- `deploy` converges the module resource on the services the harness needs, so re-running
+  it resets one that was edited by hand. A test session never does that: it adopts the
+  resource it finds.
+- Image tags other than `latest` are important: `latest` would make Kubernetes pull
+  instead of using the image loaded into the node.
 - The operand images the operator pins are published for `linux/amd64` only:
   `quay.io/opendatahub/odh-kube-rbac-proxy:odh-stable`, and `ta-lmes-job` and
   `ta-lmes-driver` in the same overlay. On an arm64 host, such as an Apple Silicon
   laptop, the operand pods stay in `ImagePullBackOff` (`no match for platform in
-  manifest`) and the rollout wait fails with the pod's reason in the timeout
-  message. Point the run at an amd64 cluster, or build the proxy for the host
-  platform from `opendatahub-io/kube-rbac-proxy` and pass it to the module
-  operator, which renders it into the workload operator:
+  manifest`) and the rollout wait fails with the pod's reason in the timeout message.
+  Point the run at an amd64 cluster, or build the proxy for the host platform from
+  `opendatahub-io/kube-rbac-proxy` and pass it to the module operator, which renders it
+  into the workload operator:
 
   ```bash
   git clone --depth 1 https://github.com/opendatahub-io/kube-rbac-proxy /tmp/kube-rbac-proxy
@@ -348,61 +349,54 @@ documented under [LLM emulator](#llm-emulator).
 
   `docker` works too, but needs `--load` on the build (buildx's `docker-container`
   driver otherwise leaves the image only in its cache) and `localhost:5005` in the
-  daemon's `insecure-registries` for the push; podman, what a podman-backed Kind
-  cluster uses, needs neither.
+  daemon's `insecure-registries` for the push; podman, what a podman-backed Kind cluster
+  uses, needs neither.
 
-  then deploy with `KUBE_RBAC_PROXY_IMG=localhost:5005/odh-kube-rbac-proxy:dev`
-  (`make deploy ...` or `make up ...`). The variable becomes the module
-  operator's `RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE`, and `make deploy` waits
-  until the workload operator renders it. The upstream
+  then deploy with `--kube-rbac-proxy-img localhost:5005/odh-kube-rbac-proxy:dev`. The
+  variable becomes the module operator's `RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE`, and
+  `deploy` waits until the workload operator renders it. The upstream
   `quay.io/brancz/kube-rbac-proxy` is multi-arch but lacks the ODH
   `--tls-curve-preferences` flag, so it cannot stand in for it.
 - Any `LMEvalJob` on the cluster keeps the module resource `Ready=False`
-  (`LMES: ... operand status is not yet available`): the module operator's
-  operand health check reads `status.conditions[type=Ready]` and `status.phase`,
-  while an `LMEvalJob` reports success as `status.state: Complete`. That includes
-  the deliberately unschedulable job the `lmeval` checks create, so a
-  `KEEP_RESOURCES` run leaves the module not ready for every later run. Delete
-  the leftover namespaces (`kubectl get ns -o name | grep -E 'trustyai-lmeval|trustyai-evalhub|trustyai-service' | xargs -r kubectl delete`)
-  before re-running, or expect that one condition to stay in the failure message
+  (`LMES: ... operand status is not yet available`): the module operator's operand health
+  check reads `status.conditions[type=Ready]` and `status.phase`, while an `LMEvalJob`
+  reports success as `status.state: Complete`. That includes the deliberately
+  unschedulable job the `lmeval` checks create, so a `KEEP_RESOURCES` run leaves the
+  module not ready for every later run. Delete the leftover namespaces (`kubectl get ns -o
+  name | grep -E 'trustyai-lmeval|trustyai-evalhub|trustyai-service' | xargs -r kubectl
+  delete`) before re-running, or expect that one condition to stay in the failure message
   until the job's finalizer has run.
-- On hosts without the `docker` CLI the harness exports each image with
-  `podman save` and loads it with `kind load image-archive`, since
-  `kind load docker-image` always shells out to `docker`.
-- `make images` passes `--load` to `docker build`. The `docker` CLI builds with
-  buildx, and when the active builder uses the `docker-container` driver a build
-  without `--load` prints `No output specified with docker-container driver` and
-  leaves the image only in the builder's cache, so `make load` fails with
-  `Error response from daemon: localhost/trustyai-service-operator:dev: image not
-  known`. `ENGINE=podman` sidesteps buildx and its builder configuration
-  altogether.
-- The module image bakes the workload operator manifests at build time. If
-  `config/` and `trustyai-operator-module/config/manifests-template/` have
-  drifted, `make images` warns; refresh the template with
-  `make -C $OPERATOR_REPO sync-trustyai-module-manifests`.
-- `make logs` tails the module operator; the workload operator has its own
-  pods in the same namespace (`-l control-plane=trustyai-service-operator`),
-  and EvalHub runs as `-l app=eval-hub`.
-- Every instance is named `evalhub` and reconciles every tenant-labelled
-  namespace, including namespaces it did not create, so a `KEEP_RESOURCES` run or
-  an interrupted one leaves an instance that keeps writing to later runs'
-  namespaces. The run grants its own job access under a name the operator does not
-  manage, so it does not depend on who reconciled last, and it logs a warning when
-  it sees more than one instance. Delete what you do not need
-  (`kubectl get evalhubs -A`).
-- The LLM emulator (`vllm-emulator`) is deployed by the fixtures into the
-  namespace under test and removed when the run ends; a job reaches it in-cluster
-  as `vllm-emulator:8000`, which is what the benchmark and adapter checks
-  submit. While a run is in flight it can be poked at from the host with
-  `kubectl -n system port-forward svc/vllm-emulator 8000`.
-- The EvalHub tests create their own instance with the sqlite database backend,
-  since Kind has no PostgreSQL, and mint its `evalhub-tls` certificate and
-  `evalhub-service-ca` bundle, which OpenShift's service CA would provide. The
-  EvalHub image is pulled from the registry rather than loaded into the node, so
-  the first `make test` needs network access; the adapter checks also fetch their
-  benchmark's dataset from the Hub. `make up EVALHUB_IMG=<ref>` points
-  the instances those tests create at another image, for example one built from
-  `eval-hub`.
+- On hosts without the `docker` CLI the harness exports each image with `podman save` and
+  loads it with `kind load image-archive`, since `kind load docker-image` always shells
+  out to `docker`.
+- `images` passes `--load` to `docker build`. The `docker` CLI builds with buildx, and
+  when the active builder uses the `docker-container` driver a build without `--load`
+  prints `No output specified with docker-container driver` and leaves the image only in
+  the builder's cache, so `load` fails with `Error response from daemon:
+  localhost/trustyai-service-operator:dev: image not known`. `ENGINE=podman` sidesteps
+  buildx and its builder configuration altogether.
+- The module image bakes the workload operator manifests at build time. If `config/` and
+  `trustyai-operator-module/config/manifests-template/` have drifted, `images` warns;
+  refresh the template with `make -C $OPERATOR_REPO sync-trustyai-module-manifests`.
+- `logs` tails both operators in the namespace (`-l control-plane=controller-manager`);
+  EvalHub runs as `-l app=eval-hub`.
+- Every instance is named `evalhub` and reconciles every tenant-labelled namespace,
+  including namespaces it did not create, so a `KEEP_RESOURCES` run or an interrupted one
+  leaves an instance that keeps writing to later runs' namespaces. The run grants its own
+  job access under a name the operator does not manage, so it does not depend on who
+  reconciled last, and it logs a warning when it sees more than one instance. Delete what
+  you do not need (`kubectl get evalhubs -A`).
+- The LLM emulator (`vllm-emulator`) is deployed by the fixtures into the namespace under
+  test and removed when the run ends; a job reaches it in-cluster as `vllm-emulator:8000`,
+  which is what the benchmark and adapter checks submit. While a run is in flight it can
+  be poked at from the host with `kubectl -n system port-forward svc/vllm-emulator 8000`.
+- The EvalHub tests create their own instance with the sqlite database backend, since Kind
+  has no PostgreSQL, and mint its `evalhub-tls` certificate and `evalhub-service-ca`
+  bundle, which OpenShift's service CA would provide. The EvalHub image is pulled from the
+  registry rather than loaded into the node, so the first `k8s-tests test` needs network
+  access; the adapter checks also fetch their benchmark's dataset from the Hub.
+  `k8s-tests up --evalhub-img <ref>` points the instances those tests create at another
+  image, for example one built from `eval-hub`.
 
 ## LLM emulator
 
@@ -419,23 +413,23 @@ tenant namespace with the value under `api-key`, the key a job's
 `MODEL_NAME` overrides the model name a job submits.
 
 ```sh
-make test MODEL_URL=http://model.example.svc:8000/v1 MODEL_KEY=sk-...
-make test MODEL_URL=http://model.example.svc:8000/v1 MODEL_NAME=granite-3b
+k8s-tests test --model-url http://model.example.svc:8000/v1 --model-key sk-...
+k8s-tests test --model-url http://model.example.svc:8000/v1 --model-name granite-3b
 ```
 
 Without `MODEL_URL`, `MODEL_KEY` is also the token the emulator requires, so the
 credential plumbing can be exercised with a key of your own.
 
 The tests own the emulator. `tests/conftest.py` deploys it into the namespace
-under test (and removes it afterwards), so `make up` leaves no emulator behind
+under test (and removes it afterwards), so `k8s-tests up` leaves no emulator behind
 and a run cannot depend on one someone left in the cluster. The image, namespace,
 port and token are parameters:
 
 ```sh
-make test                                  # default emulator, namespace and token
-make test EMULATOR_NAMESPACE=my-ns         # somewhere else
-make test EMULATOR_IMG=quay.io/.../vllm_emulator:<tag>
-make test EMULATOR_TOKEN=another-token
+k8s-tests test                             # default emulator, namespace and token
+k8s-tests test --emulator-namespace my-ns  # somewhere else
+k8s-tests test --emulator-img quay.io/.../vllm_emulator:<tag>
+k8s-tests test --emulator-token another-token
 ```
 
 The emulator image has no notion of credentials, so the fixture mounts a wrapper
@@ -466,7 +460,7 @@ EvalHub API and reads its results:
   that is set.
 
 It is the harness's own end-to-end check of the API, the sidecar and the
-credential, so it stays in `make test`. Benchmarks that are the point of the run
+credential, so it stays in `k8s-tests test`. Benchmarks that are the point of the run
 rather than a check of the plumbing live in [EvalHub adapters](#evalhub-adapters),
 one per entry in its table.
 
@@ -482,7 +476,7 @@ cold Kind node); afterwards the run is about a minute. It is marked `benchmark`,
 so it can be filtered out:
 
 ```sh
-make test PYTEST_ARGS="-m 'not benchmark'"
+k8s-tests test --pytest-args "-m 'not benchmark'"
 ```
 
 ## EvalHub adapters
@@ -509,14 +503,14 @@ rather than the job merely reporting success.
 The section carries `evalhub` and `adapters`: it is part of the EvalHub selection,
 and `adapters` names the section within it. Because an adapter run costs minutes
 and fetches its benchmark's dataset from the Hub, it is the one section the default
-run excludes - `make test` is `-m 'not adapters'` and `make test-evalhub` is
+run excludes - `k8s-tests test` is `-m 'not adapters'` and `--section evalhub` is
 `-m 'evalhub and not adapters'` - so it is not selected by accident, only by name:
 
 ```sh
-make test-evalhub-adapters                    # only this section, into reports/adapters.html
-make test-evalhub-adapters KEEP_RESOURCES=1   # leave the job, its pod and the adapter logs behind
-make test-all                                 # every section, the adapters included
-make test-select SELECT='-m adapters'         # the same selection, into the usual report
+k8s-tests test --section adapters             # only this section, into reports/adapters.html
+k8s-tests test --section adapters --keep-resources   # leave the job, its pod and the logs behind
+k8s-tests test --section all                  # every section, the adapters included
+k8s-tests test --select '-m adapters'         # the same selection, into the usual report
 ```
 
 ## Collection generation authorization
@@ -562,9 +556,9 @@ when `X-Tenant` names a namespace it has no grant in. The section carries the
 report and can be selected on its own:
 
 ```sh
-make test-evalhub-generation                  # this section only
-make test-select SELECT='-m generation'       # the same, spelled as a selection
-make test-select SELECT='-k tenant_role'      # or one check of it, by name
+k8s-tests test --section generation           # this section only
+k8s-tests test --select '-m generation'       # the same, spelled as a selection
+k8s-tests test --select '-k tenant_role'      # or one check of it, by name
 ```
 
 ## LMEvalJob
@@ -598,7 +592,7 @@ does it, by writing the status a finished run reports, because that is the input
 repair path reacts to.
 
 ```sh
-make test-lmeval    # only this section
+k8s-tests test --section lmeval    # only this section
 ```
 
 ## TrustyAI service
@@ -612,11 +606,11 @@ The service image matters, because the operator's ODH manifest pins
 mounts a serving key the current deployment template no longer provides and
 crash-loops on `/etc/tls/internal/tls.crt`. The harness therefore passes
 `TRUSTYAI_SERVICE_IMG` (the Python service by default) through
-`RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_PY_IMAGE`, and `make test` asserts the
+`RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_PY_IMAGE`, and `k8s-tests test` asserts the
 operand runs exactly that image:
 
 ```sh
-make up OPERATOR_REPO=... TRUSTYAI_SERVICE_IMG=quay.io/you/trustyai-service@sha256:...
+k8s-tests up --operator-repo ... --trustyai-service-img quay.io/you/trustyai-service@sha256:...
 ```
 
 Three pieces are seeded by the fixtures because the platform supplies them on
@@ -645,7 +639,7 @@ operators.
 | `tests/test_trustyai_workload.py` | the workload operator image: it matches the `RELATED_IMAGE_*` value the module operator renders it from, the image the harness built, and the operator's own ConfigMap |
 | `tests/test_emulator.py` | the LLM emulator (skipped when `MODEL_URL` is set): its Deployment runs the pinned image and is healthy, `/health` needs no token, `/v1/completions` and `/v1/chat/completions` answer `401` without the token or with another one and `200` with the token from the `vllm-emulator-auth` Secret, that Secret carries the `api-key` key `model.auth.secret_ref` resolves, and the token check reports which token fingerprint it saw |
 | `tests/evalhub/test_evalhub_benchmark.py` | a benchmark job: the API accepts a job for `arc_easy` with `num_examples: 1` against the emulator or `MODEL_URL`, it reaches `completed`, its results carry the benchmark id, provider and numeric metrics, and - against the emulator - the emulator saw the tenant Secret's token (or `MODEL_KEY`) on a `/v1` request |
-| `tests/evalhub/test_evalhub_adapters.py` | the EvalHub adapters section (opt-in, `make test-evalhub-adapters`): each benchmark in its table - currently `ethics_cm` of `lm_evaluation_harness`, with `num_examples: 1` against the emulator or `MODEL_URL` - is accepted as the job's only benchmark, reaches `completed`, reports the benchmark, provider, numeric metrics and the `acc` its provider scores it on, turns its pass criteria into a test outcome, and - against the emulator - the emulator authenticated the model requests it made |
+| `tests/evalhub/test_evalhub_adapters.py` | the EvalHub adapters section (opt-in, `k8s-tests test --section adapters`): each benchmark in its table - currently `ethics_cm` of `lm_evaluation_harness`, with `num_examples: 1` against the emulator or `MODEL_URL` - is accepted as the job's only benchmark, reaches `completed`, reports the benchmark, provider, numeric metrics and the `acc` its provider scores it on, turns its pass criteria into a test outcome, and - against the emulator - the emulator authenticated the model requests it made |
 | `tests/evalhub/test_evalhub_collection_generation.py` | the authorization `trustyai-service-operator#1131` added for the collection generation API: the mounted policy maps `POST /api/v1/evaluations/collections/generation` to `evaluations create` and `GET`/`DELETE .../generation/{id}` to `evaluations` `{{.FromMethod}}`, each declared once with the `X-Tenant` rewrite and ahead of the generic `/api/v1/evaluations/collections/*` entry that also maps `get` and `delete`; the removed `.../generation/models` path has no mapping; the pod template's `auth.yaml` digest describes the policy the container mounts; the tenant-user Role grants `evaluations` `get`/`create`/`delete` and no collection write; and, as an identity granted exactly those rules, all three paths answer through the proxy (not `401`/`403`), need a token, and are refused when `X-Tenant` names a namespace the identity has no grant in |
 | `tests/lmeval/test_lmeval_network_policy.py` | an `LMEvalJob`: the operator creates one NetworkPolicy, owned by the job, admitting no ingress and one allow-all egress rule, selecting the Pod on the identity labels it also stamps there; taking any of the four identity labels off the Pod is repaired (also for a completed job, where only the Pod watch is left to trigger it); editing the policy's rules is repaired while an annotation the operator does not own is kept; and deleting the policy brings a replacement with a new UID rather than reviving the old one |
 | `tests/test_trustyai_service.py` | the TrustyAI service: the CRD serves `v1` and `v1alpha1` through a conversion webhook and a resource created as one reads back as the other; the operand rolls out one replica with the `trustyai-service`, `kube-rbac-proxy` and `internal-tls-proxy` containers, runs the requested image, carries the resource's schedule and storage settings, and mounts a bound claim at the requested size; `/q/health` answers `healthy` unauthenticated; `/info` needs a token and refuses one without the grant; both halves of a drift comparison upload and are counted; CompareMeans detects the shifted distribution; and a scheduled metric is listed once and deleted |
@@ -658,36 +652,36 @@ Every module in a component directory carries that component's marker as well as
 own, so a section is both part of its component and runnable on its own.
 
 ```sh
-make test                                                  # everything except the adapters
-make test-evalhub                                          # all EvalHub checks, adapters excluded
-make test-evalhub-generation                               # just the collection generation authorization
-make test-evalhub-adapters                                 # just the adapter jobs (slow, own report)
-make test-lmeval                                           # just the LMEvalJob checks
-make test-all                                              # everything, adapters included
+k8s-tests test                                              # everything except the adapters
+k8s-tests test --section evalhub                            # all EvalHub checks, adapters excluded
+k8s-tests test --section generation                         # just the collection generation authorization
+k8s-tests test --section adapters                           # just the adapter jobs (slow, own report)
+k8s-tests test --section lmeval                             # just the LMEvalJob checks
+k8s-tests test --section all                                # everything, adapters included
 ```
 
-Anything else goes through `test-select`, which takes a marker expression, a
-directory, a node id or `-k` - whatever pytest accepts:
+Anything else goes through `--select`, which takes a marker expression, a directory,
+a node id or `-k` - whatever pytest accepts:
 
 ```sh
-make test-select SELECT='-m generation'                    # one section
-make test-select SELECT=tests/evalhub                      # one component directory
-make test-select SELECT=tests/lmeval                       # the same, for another component
-make test-select SELECT='-m "evalhub and not adapters"'     # a component without its slow section
-make test-select SELECT='-m "evalhub and not benchmark and not adapters"'
-make test-select SELECT=tests/evalhub/test_evalhub_collection_generation.py
-make test-select SELECT=tests/evalhub/test_evalhub.py::test_evalhub_health_endpoint
-make test-select SELECT='-k tenant_role'                   # one check, by name
+k8s-tests test --select '-m generation'                    # one section
+k8s-tests test --select tests/evalhub                       # one component directory
+k8s-tests test --select tests/lmeval                        # the same, for another component
+k8s-tests test --select '-m "evalhub and not adapters"'     # without its slow section
+k8s-tests test --select '-m "evalhub and not benchmark and not adapters"'
+k8s-tests test --select tests/evalhub/test_evalhub_collection_generation.py
+k8s-tests test --select tests/evalhub/test_evalhub.py::test_evalhub_health_endpoint
+k8s-tests test --select '-k tenant_role'                    # one check, by name
 ```
 
 For example: `-m module` the modular stack, `-m workload` the workload operator,
 `-m lmeval` an `LMEvalJob` and its NetworkPolicy, `-m service` the TrustyAI service,
 `-m emulator` the LLM emulator, `-m benchmark` the harness smoke job. The same
-selections run through `make test PYTEST_ARGS=...` when a full run with an extra
+selections run through `k8s-tests test --pytest-args ...` when a full run with an extra
 filter is what you want; `test-select` runs only the selection.
 
 `-m evalhub` includes the adapter jobs, because they are EvalHub checks too; they
-are excluded from `make test` and `make test-evalhub` by the `adapters` marker
+are excluded from `k8s-tests test` and `--section evalhub` by the `adapters` marker
 rather than by not being marked. See [EvalHub adapters](#evalhub-adapters).
 
 Checks that need an OLM-managed or platform-managed install are deliberately
@@ -706,18 +700,18 @@ certificate, because a forwarded port is reached as 127.0.0.1 and the harness
 certificate only covers the in-cluster Service names.
 
 ```sh
-make test PYTEST_ARGS="-v"                                 # extra pytest flags
-KUBE_CONTEXT=my-cluster NAMESPACE=opendatahub make test     # another cluster
+k8s-tests test --pytest-args "-v"                          # extra pytest flags
+k8s-tests test --kube-context my-cluster --namespace opendatahub   # another cluster
 ```
 
 ### Keeping the resources
 
 By default the fixtures remove what they created. Set `KEEP_RESOURCES=1` - or run
-`make test-keep`, or pass `--keep-resources` through `PYTEST_ARGS` - to leave it
+`k8s-tests test --keep-resources` - to leave it
 all in place and look at it afterwards:
 
 ```sh
-make test KEEP_RESOURCES=1
+k8s-tests test --keep-resources
 kubectl -n "$(kubectl get ns -o name | grep trustyai-evalhub | head -1 | cut -d/ -f2)" get all,cm,evalhubs,jobs
 kubectl -n system get deploy,svc,cm,secret -l app=vllm-emulator
 ```
@@ -728,10 +722,10 @@ its pod and the adapter logs. The run logs each namespace it leaves behind and t
 HTML report says so too. Nothing is kept silently: with the default setting those
 are removed at the end of the session.
 
-The two operators - and the module resource `make up` applied - are not the
-fixtures' to remove: they stay until `make down` deletes the cluster, or until you
+The two operators - and the module resource `k8s-tests up` applied - are not the
+fixtures' to remove: they stay until `k8s-tests down` deletes the cluster, or until you
 delete the resource, which takes the workload operator and its operands with it.
-A session that had to create the resource itself, because no `make deploy` had run
+A session that had to create the resource itself, because no `k8s-tests deploy` had run
 on that cluster, does delete it again, and a later run adopts whatever it finds
 rather than replacing it.
 
@@ -758,22 +752,22 @@ the readiness of every pod, so a passing run shows what was checked and a
 failing one says what was not.
 
 Every run also writes a self-contained HTML report (git-ignored) that keeps the
-captured log and failure detail per test: `reports/report.html` for `make test`
-and `make test-all`, `reports/adapters.html` for `make test-evalhub-adapters`.
+captured log and failure detail per test: `reports/report.html` for `k8s-tests test`
+and `--section all`, `reports/adapters.html` for `--section adapters`.
 The run is ordered by scope and the report shows it: one block each for the EvalHub
 adapters, EvalHub, the LLM emulator, an `LMEvalJob`, the module operator, the
 TrustyAI service and the workload operator, a `Scope` column naming the block its
 first row starts, and a per-scope count above the table.
 
 ```sh
-make test REPORT_FILE=/tmp/trustyai.html                     # choose the report path
-make test-evalhub-adapters ADAPTERS_REPORT_FILE=/tmp/a.html  # the same for the adapters
+k8s-tests test --report /tmp/trustyai.html                   # choose the report path
+k8s-tests test --section adapters --report /tmp/a.html       # the same for the adapters
 ```
 
 Checks run against `KUBE_CONTEXT` (default `kind-trustyai`) and `NAMESPACE`
 (default `system`), the values the harness uses by default. A missing kubeconfig
 or context skips the suite; a missing Deployment fails with a pointer to
-`make up`.
+`k8s-tests up`.
 
 Layout:
 
@@ -793,18 +787,19 @@ Layout:
 - `utilities/` — helpers shared by the tests; `utilities/kube.py` loads the
   clients and turns Deployment and pod status into readable failures,
   `utilities/trustyai.py` builds the module resource and waits for the stack
-  under it, `utilities/stack.py` runs those steps for `make deploy`,
+  under it, `utilities/stack.py` runs those steps for `k8s-tests deploy`,
   `utilities/trustyai_service.py` owns the whole `TrustyAIService` workload
   lifecycle, `utilities/portforward.py` hands out local ports for the forwards,
   `utilities/model.py` chooses the model endpoint (`MODEL_URL` and `MODEL_KEY`)
   and writes the credential Secret it resolves, and the other modules hold the
   per-component helpers
 - `conftest.py` — session fixtures for the context, namespace and API clients
-- `pyproject.toml` — the dependencies (`kubernetes`, `pytest`, `requests`,
+- `harness/` — the CLI: settings, cluster, images, registry, deploy, selections
+- `pyproject.toml` — the dependencies (`click`, `kubernetes`, `pytest`, `requests`,
   `cryptography`, `pyyaml`) with the `pytest-html` and `ruff` dev group, the marker
-  registry, and the `ruff` configuration; `uv.lock` pins them and the make
-  targets run them through `uv`
+  registry, the console script and the `ruff` configuration; `uv.lock` pins them and
+  `uv run` runs them
 
-`make lint` runs `ruff check` and `ruff format --check`; `make fmt` fixes both.
-`.github/workflows/python-lint.yaml` runs `make lint` in CI on pushes to
+`k8s-tests lint` runs `ruff check` and `ruff format --check`; `k8s-tests fmt` fixes both.
+`.github/workflows/python-lint.yaml` runs `k8s-tests lint` in CI on pushes to
 `main` and on pull requests.
