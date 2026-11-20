@@ -27,8 +27,7 @@ suite, the way a user would, so the operand lifecycle is under test.
 The harness is a Python package with a console script; there is no shell script left in
 it. Every knob is a flag and an environment variable of the same name, so
 `k8s-tests up --operator-repo X` and `OPERATOR_REPO=X k8s-tests up` are the same run, and
-`k8s-tests --help` documents both spellings. The `Makefile` only forwards
-`make <target>` to the CLI for muscle memory.
+`k8s-tests --help` documents both spellings.
 
 ### Prerequisites
 

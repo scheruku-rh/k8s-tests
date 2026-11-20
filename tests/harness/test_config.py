@@ -21,7 +21,7 @@ def test_every_setting_has_a_distinct_option_and_variable():
     assert len(set(variables)) == len(variables)
 
 
-def test_defaults_match_the_makefile_the_command_replaces():
+def test_defaults_match_the_harness_this_replaces():
     settings = Settings()
     assert settings.kind_cluster == "trustyai"
     assert settings.kube_context == "kind-trustyai"

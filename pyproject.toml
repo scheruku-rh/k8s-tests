@@ -17,7 +17,6 @@ dependencies = [
 ]
 
 [project.scripts]
-# The harness used to be a Makefile; this is what replaced it.
 k8s-tests = "harness.cli:main"
 
 [build-system]

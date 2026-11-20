@@ -363,7 +363,7 @@ class Settings:
             object.__setattr__(self, "lmes_repo", self.sibling_checkout("lm-evaluation-harness"))
 
     def sibling_checkout(self, name: str) -> str:
-        """A checkout beside this one, which is where the Makefile's defaults pointed."""
+        """A checkout beside this one, which is where the defaults expect one."""
         root = repository_root()
         return str((root or REPO_ROOT).parent / name) if root is not None else ""
 

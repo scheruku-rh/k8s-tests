@@ -50,7 +50,7 @@ def test_help_documents_the_settings_with_their_variables(runner):
 
 
 def test_there_is_a_command_for_every_make_target(runner):
-    """`make test-evalhub-adapters` and friends become `test --section ...`."""
+    """Every section of the checks is a choice of `test --section`."""
     output = invoke(runner, "test", "--help").output
     for section in ("standard", "all", "adapters", "evalhub", "generation", "lmeval"):
         assert section in output
@@ -84,12 +84,11 @@ def test_up_registry_runs_the_registry_flow(runner, monkeypatch):
     assert calls == ["cluster", "images-all", "deploy-registry"]
 
 
-def test_down_and_cluster_delete_are_the_same_command(runner, monkeypatch):
+def test_down_deletes_the_cluster(runner, monkeypatch):
     deleted: list[str] = []
     monkeypatch.setattr(cluster, "delete", lambda settings: deleted.append(settings.kind_cluster))
     assert invoke(runner, "down").exit_code == 0
-    assert invoke(runner, "cluster-delete").exit_code == 0
-    assert deleted == ["trustyai", "trustyai"]
+    assert deleted == ["trustyai"]
 
 
 def test_a_command_reports_a_harness_error_without_a_traceback(runner, monkeypatch):

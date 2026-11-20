@@ -1,4 +1,4 @@
-"""The command line: the harness commands, with no Makefile between them.
+"""The command line: the harness commands, one subcommand per step.
 
 Every setting is an option and an environment variable of the same name, so
 `OPERATOR_REPO=... k8s-tests up` and `k8s-tests up --operator-repo ...` are the same run,
@@ -102,7 +102,7 @@ class HarnessGroup(click.Group):
 
 
 def _drop_empty_environment() -> None:
-    """Treat an empty variable as unset, the way the Makefile's `?=` did."""
+    """Treat an empty variable as unset rather than as a value."""
     for setting in SETTINGS:
         if setting.envvar in os.environ and not os.environ[setting.envvar].strip():
             del os.environ[setting.envvar]
@@ -143,13 +143,6 @@ def cluster(settings: Settings) -> None:
 @click.pass_obj
 def down(settings: Settings) -> None:
     """Delete the Kind cluster."""
-    cluster_ops.delete(settings)
-
-
-@cli.command("cluster-delete")
-@click.pass_obj
-def cluster_delete(settings: Settings) -> None:
-    """Delete the Kind cluster (the name the Makefile used)."""
     cluster_ops.delete(settings)
 
 
