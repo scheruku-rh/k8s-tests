@@ -37,7 +37,7 @@ def operator_repo(settings: Settings) -> Path:
     if not settings.operator_repo:
         raise HarnessError(
             "OPERATOR_REPO must point at a trustyai-service-operator checkout, "
-            "for example --operator-repo ~/Sync/code/reference/trustyai-service-operator"
+            "for example --operator-repo /path/to/trustyai-service-operator"
         )
     repo = Path(settings.operator_repo).expanduser()
     if not repo.is_dir():
