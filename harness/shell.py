@@ -39,15 +39,23 @@ def run(
     """Run a command, raising `HarnessError` with its output when it fails."""
     argv = [str(part) for part in command]
     LOGGER.debug("running %s", " ".join(argv))
-    result = subprocess.run(
-        argv,
-        capture_output=capture,
-        text=True,
-        input=input_text,
-        env=dict(env) if env is not None else None,
-        cwd=cwd,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=capture,
+            text=True,
+            input=input_text,
+            env=dict(env) if env is not None else None,
+            cwd=cwd,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        missing = exc.filename or argv[0]
+        if check:
+            raise HarnessError(f"{missing} is not installed") from exc
+        # A probe for a binary that is not on this host: "not installed" is an answer,
+        # not a crash. 127 is what a shell reports, and the caller reads the status.
+        return subprocess.CompletedProcess(argv, 127, "", f"{missing} is not installed")
     if check and result.returncode != 0:
         detail = ((result.stderr or "") or (result.stdout or "")).strip() if capture else ""
         message = f"{argv[0]} failed with exit status {result.returncode}"

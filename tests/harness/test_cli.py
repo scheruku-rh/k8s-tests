@@ -122,3 +122,19 @@ def test_an_empty_variable_is_treated_as_unset(monkeypatch):
     import os
 
     assert "NAMESPACE" not in os.environ
+
+
+def test_kind_gets_no_provider_when_nothing_owns_a_cluster(runner, monkeypatch):
+    """`down` works on a host with podman only and no cluster (a FileNotFoundError before)."""
+    from harness import cluster, engine
+
+    monkeypatch.setattr(engine, "which", lambda name: "/usr/bin/podman" if name == "podman" else None)
+    monkeypatch.setattr(engine, "succeeded", lambda command, **kwargs: False)
+    monkeypatch.setattr(engine, "output", lambda command, **kwargs: "")
+    assert "KIND_EXPERIMENTAL_PROVIDER" not in cluster.kind_environment(Settings())
+    assert cluster.kind_environment(Settings(kind_provider="podman"))["KIND_EXPERIMENTAL_PROVIDER"] == "podman"
+
+    deleted: list[list[object]] = []
+    monkeypatch.setattr(cluster, "run", lambda command, **kwargs: deleted.append(list(command)))
+    assert invoke(runner, "down").exit_code == 0
+    assert deleted and deleted[0][:3] == ["kind", "delete", "cluster"]
