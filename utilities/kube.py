@@ -17,7 +17,7 @@ from utilities.portforward import kubectl_binary
 DEFAULT_CONTEXT = "kind-trustyai"
 DEFAULT_NAMESPACE = "system"
 
-# Set by `make test KEEP_RESOURCES=1` (or pytest's --keep-resources): the fixtures
+# Set by `k8s-tests test --keep-resources` (or pytest's --keep-resources): the fixtures
 # then leave what they created on the cluster for inspection.
 KEEP_RESOURCES_VAR = "KEEP_RESOURCES"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -29,12 +29,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 def context_from_env() -> str:
-    """Kubernetes context under test; the Makefile creates `kind-trustyai`."""
+    """Kubernetes context under test; the harness creates `kind-trustyai`."""
     return os.environ.get("KUBE_CONTEXT", DEFAULT_CONTEXT)
 
 
 def namespace_from_env() -> str:
-    """Namespace under test; the Makefile deploys into `system`."""
+    """Namespace under test; the harness deploys into `system`."""
     return os.environ.get("NAMESPACE", DEFAULT_NAMESPACE)
 
 
@@ -70,7 +70,7 @@ def read_deployment(apps_client: client.AppsV1Api, name: str, namespace: str) ->
     # Outside the handler, so the API error does not get chained onto the failure.
     pytest.fail(
         f"deployment {namespace}/{name} was not found on context {context_from_env()!r}; "
-        "run 'make up' or 'make deploy' first, or point KUBE_CONTEXT/NAMESPACE at a cluster that has it",
+        "run 'k8s-tests up' or 'k8s-tests deploy' first, or point KUBE_CONTEXT/NAMESPACE at a cluster that has it",
         pytrace=False,
     )
 

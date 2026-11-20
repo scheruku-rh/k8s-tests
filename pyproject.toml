@@ -5,12 +5,41 @@ description = "Kubernetes-level tests and harnesses for the TrustyAI components"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "click>=8.1",
     "cryptography>=43",
     "kubernetes>=31.0.0",
     "pyyaml>=6",
     "pytest>=8.0",
+    # `k8s-tests test` writes the HTML report it documents, and the bundled pytest
+    # configuration asks for one, so an installation cannot run the checks without it.
+    "pytest-html>=4.1",
     "requests>=2.32",
 ]
+
+[project.scripts]
+k8s-tests = "harness.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness", "utilities"]
+
+# The checks and their assets go into the wheel as `harness/data/`, under the names they
+# have in the checkout: `k8s-tests` then runs the whole suite from anywhere, and
+# `harness.resources` reads either layout.
+[tool.hatch.build.targets.wheel.force-include]
+"tests" = "harness/data/tests"
+"conftest.py" = "harness/data/conftest.py"
+"pyproject.toml" = "harness/data/pyproject.toml"
+"hack" = "harness/data/hack"
+# Only the report logo: the README's own logo has no business in the wheel.
+"docs/trustyai.png" = "harness/data/docs/trustyai.png"
+
+[project.optional-dependencies]
+# What `lint` and `fmt` shell out to; only a checkout needs them.
+tools = ["ruff>=0.6"]
 
 [dependency-groups]
 dev = [

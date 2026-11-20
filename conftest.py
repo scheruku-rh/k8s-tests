@@ -1,7 +1,7 @@
 """Shared pytest fixtures.
 
-The tests talk to a live cluster, by default the Kind cluster the Makefile
-deploys the operators into. Override the target with KUBE_CONTEXT and
+The tests talk to a live cluster, by default the Kind cluster the harness deploys
+the operators into. Override the target with KUBE_CONTEXT and
 NAMESPACE when running against a different cluster or namespace.
 """
 

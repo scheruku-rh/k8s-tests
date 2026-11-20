@@ -32,7 +32,7 @@ MODULE_CR_NAME = "default-trustyai"
 MODULE_OPERATOR_DEPLOYMENT = "trustyai-operator-module-controller-manager"
 WORKLOAD_OPERATOR_DEPLOYMENT = "trustyai-service-operator-controller-manager"
 
-# Image variables `make images-all` records in reports/images.env. The file lets
+# Image variables `k8s-tests images-all` records in reports/images.env. The file lets
 # a test run compare the deployment against the images that were pushed without
 # asking the caller to pass every variable again.
 IMAGE_ENV_VARS = (
@@ -43,14 +43,14 @@ IMAGE_ENV_VARS = (
     "INSPECT_IMG",
     "LIGHTEVAL_IMG",
 )
-# The two load-path images the Makefile computes from IMAGE_PREFIX and TAG, so a
+# The two load-path images the harness computes from IMAGE_PREFIX and TAG, so a
 # value that is only that default can be told apart from one the caller chose.
 LOAD_PATH_IMAGES = {"WORKLOAD_IMG": "trustyai-service-operator", "MODULE_IMG": "trustyai-operator-module"}
 IMAGE_PREFIX_VAR = "IMAGE_PREFIX"
 IMAGE_TAG_VAR = "TAG"
-# hack/deploy.sh rewrites reports/images.env with this header when the deployment
+# `k8s-tests deploy` rewrites reports/images.env with this header when the deployment
 # ran the values it records; before that the file only lists what was pushed.
-IMAGES_ENV_DEPLOYED_MARKER = "Written by hack/deploy.sh"
+IMAGES_ENV_DEPLOYED_MARKER = "Written by k8s-tests deploy"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 IMAGES_ENV_FILE = REPO_ROOT / "reports" / "images.env"
 
@@ -58,9 +58,9 @@ IMAGES_ENV_FILE = REPO_ROOT / "reports" / "images.env"
 def image_env_file() -> pathlib.Path:
     """The file holding the image references: IMAGES_ENV_FILE when it is set.
 
-    hack/build-all-images.sh, hack/deploy.sh and hack/clean.sh read the same
-    variable, so a run that moved the file is read back from where it wrote it.
-    A relative value is resolved against the checkout, the way make resolves it.
+    The harness commands that write, deploy and clean read the same variable, so a
+    run that moved the file is read back from where it wrote it. A relative value is
+    resolved against the checkout.
     """
     override = os.environ.get("IMAGES_ENV_FILE")
     if not override:
@@ -70,7 +70,7 @@ def image_env_file() -> pathlib.Path:
 
 
 def load_path_default(key: str) -> str:
-    """The image the Makefile computes for `key` when the caller did not set it."""
+    """The image the harness computes for `key` when the caller did not set it."""
     prefix = os.environ.get(IMAGE_PREFIX_VAR) or "localhost"
     tag = os.environ.get(IMAGE_TAG_VAR) or "dev"
     return f"{prefix}/{LOAD_PATH_IMAGES[key]}:{tag}"
@@ -79,14 +79,14 @@ def load_path_default(key: str) -> str:
 def load_image_env(path: pathlib.Path | None = None) -> None:
     """Fill image variables from the file a registry deploy recorded.
 
-    `make images-all` writes what it pushed; hack/deploy.sh keeps the keys it
-    deployed and marks the file with IMAGES_ENV_DEPLOYED_MARKER. Only a marked
+    `k8s-tests images-all` writes what it pushed; `k8s-tests deploy` keeps the keys
+    it deployed and marks the file with IMAGES_ENV_DEPLOYED_MARKER. Only a marked
     file is read, so images that were built but never deployed cannot make the
     checks compare against something the cluster does not run.
 
-    The Makefile exports `WORKLOAD_IMG`/`MODULE_IMG` with their load-path
-    defaults, so a value that is only that default is treated as unset. Anything
-    else - a value passed on the make command line or a different prefix - wins.
+    The harness exports `WORKLOAD_IMG`/`MODULE_IMG` with their load-path defaults,
+    so a value that is only that default is treated as unset. Anything else - a
+    value passed as a flag or variable, or a different prefix - wins.
     """
     try:
         lines = (path or image_env_file()).read_text().splitlines()
@@ -140,9 +140,9 @@ WEBHOOK_CERT_SECRET = "webhook-server-cert"
 RELATED_IMAGE_PREFIX = "RELATED_IMAGE_"
 
 # Env var through which the module operator tells itself which workload operator
-# image to render. The harness patches it in hack/deploy.sh.
+# image to render. `k8s-tests deploy` patches it in.
 WORKLOAD_IMAGE_RELATED_ENV = "RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_OPERATOR_IMAGE"
-# Image variables the Makefile exports for the images it built.
+# Image variables the harness exports for the images it built.
 MODULE_IMAGE_VAR = "MODULE_IMG"
 WORKLOAD_IMAGE_VAR = "WORKLOAD_IMG"
 
@@ -200,7 +200,7 @@ def _module_resource(dynamic_client: DynamicClient, api_version: str) -> Any:
     except ResourceNotFoundError:
         pytest.fail(
             f"{MODULE_API_GROUP}/{api_version} {MODULE_KIND} is not served on this cluster; "
-            "run 'make up' or 'make deploy' first",
+            "run 'k8s-tests up' or 'k8s-tests deploy' first",
             pytrace=False,
         )
 
@@ -273,7 +273,7 @@ def apply_module(
 ) -> dict[str, Any]:
     """Create the module resource, or converge an existing one on the spec this harness needs.
 
-    `make deploy` runs this through `utilities.stack`, so re-deploying resets a
+    `k8s-tests deploy` runs this through `utilities.stack`, so re-deploying resets a
     resource somebody edited by hand - the services the harness needs are the ones
     it declares. The fixture does not apply it: it adopts what it finds (see
     `ensure_module`), because a platform-managed resource is not the harness's to
@@ -454,7 +454,7 @@ def deployment_env(apps_client: client.AppsV1Api, name: str, namespace: str, env
 
 
 def expected_image_from_env(var_name: str) -> str | None:
-    """Image the Makefile built and loaded, when the run came through `make test`."""
+    """Image the harness built and loaded, when the run came through `k8s-tests test`."""
     image = os.environ.get(var_name) or ""
     return image or None
 
@@ -462,11 +462,11 @@ def expected_image_from_env(var_name: str) -> str | None:
 # --- bringing the stack up -----------------------------------------------
 #
 # The module resource is built here rather than shipped as a manifest, so the
-# waits that used to follow `kubectl apply -f trustyai-cr.yaml` in hack/deploy.sh
-# live here too: the workload operator Deployment appearing, the values the module
-# operator renders it with, and the conversion webhooks the checks go through.
-# `utilities.stack` runs them for `make deploy`, and the `trustyai_module` fixture
-# runs them for a cluster that was brought up another way.
+# waits that follow applying it live here too: the workload operator Deployment
+# appearing, the values the module operator renders it with, and the conversion
+# webhooks the checks go through. `utilities.stack` runs them for
+# `k8s-tests deploy`, and the `trustyai_module` fixture runs them for a cluster
+# that was brought up another way.
 
 
 def _read_deployment_or_none(

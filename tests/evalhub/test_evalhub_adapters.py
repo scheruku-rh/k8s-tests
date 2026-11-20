@@ -9,9 +9,9 @@ benchmark is one entry there, and every check below then runs once for it.
 The section carries the `evalhub` and `adapters` markers: `evalhub` puts it in the
 EvalHub selection, `adapters` names the section within it. An adapter run costs
 minutes per benchmark - the adapter image is pulled and the dataset fetched from
-the Hub - so it is never part of a default run: `make test` excludes the
-`adapters` marker, `make test-evalhub` is `evalhub and not adapters`, and
-`make test-evalhub-adapters` runs this section alone, into its own report.
+the Hub - so it is never part of a default run: `k8s-tests test` excludes the
+`adapters` marker, `--section evalhub` is `evalhub and not adapters`, and
+`--section adapters` runs this section alone, into its own report.
 """
 
 from __future__ import annotations

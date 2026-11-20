@@ -123,7 +123,7 @@ def read_evalhub(dynamic_client: DynamicClient, api_version: str, name: str, nam
         return _evalhub_resource(dynamic_client, api_version).get(name=name, namespace=namespace).to_dict()
     except NotFoundError:
         pytest.fail(
-            f"{EVALHUB_KIND}/{name} was not found in {namespace}; run 'make up' or 'make deploy' first",
+            f"{EVALHUB_KIND}/{name} was not found in {namespace}; run 'k8s-tests up' or 'k8s-tests deploy' first",
             pytrace=False,
         )
 

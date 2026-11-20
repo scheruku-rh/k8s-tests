@@ -2,7 +2,7 @@
 
 The image the Deployment runs is compared against every source that decides it:
 the `RELATED_IMAGE_*` value the module operator renders the workload operator
-from, the image the Makefile built, and the operator's own ConfigMap.
+from, the image the harness built, and the operator's own ConfigMap.
 
 Two further checks need an OLM-installed operator and have no subject on Kind,
 which has neither OLM nor a CSV: the image being advertised in the operator CSV's
@@ -65,7 +65,7 @@ def test_workload_operator_image_matches_the_module_override(apps_client: client
 
 
 def test_workload_operator_runs_the_built_image(apps_client: client.AppsV1Api, namespace: str) -> None:
-    """The workload operator runs the image the harness built, when the run came through `make test`."""
+    """The workload operator runs the image the harness built, when the run came through `k8s-tests test`."""
     expected = expected_image_from_env(WORKLOAD_IMAGE_VAR)
     if expected is None:
         pytest.skip(f"{WORKLOAD_IMAGE_VAR} is not set, so there is no built image to compare against")
