@@ -34,7 +34,7 @@ TAG ?= dev
 IMAGE_PREFIX ?= localhost
 WORKLOAD_IMG ?= $(IMAGE_PREFIX)/trustyai-service-operator:$(TAG)
 MODULE_IMG ?= $(IMAGE_PREFIX)/trustyai-operator-module:$(TAG)
-# Leave empty to use docker when available, otherwise podman.
+# Leave empty to use podman when it is reachable, otherwise docker.
 ENGINE ?=
 
 # The LLM emulator the checks call as their model is deployed and removed by the
@@ -69,9 +69,47 @@ EVALHUB_IMG ?=
 # crash-loops on /etc/tls/internal/tls.crt. The default here is the Python
 # rewrite the operator is written for; set it to a build under test to override.
 TRUSTYAI_SERVICE_IMG ?= quay.io/trustyai/trustyai-service:latest
+# kube-rbac-proxy sidecar image passed through
+# RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE. The operator's ODH overlay pins
+# quay.io/opendatahub/odh-kube-rbac-proxy:odh-stable, which is published for
+# linux/amd64 only: on an arm64 host the operand pods stay in ImagePullBackOff
+# with "no match for platform in manifest". Point it at an arm64 build of
+# opendatahub-io/kube-rbac-proxy on those hosts; the upstream brancz image is
+# multi-arch but does not accept the --tls-curve-preferences flag the rendered
+# operands pass.
+KUBE_RBAC_PROXY_IMG ?=
 TIMEOUT ?= 300s
 PYTEST_ARGS ?=
 REPORT_FILE ?= reports/report.html
+
+# `images-all` builds every image the suite can build from source and pushes it
+# to a local registry container on 127.0.0.1:$(REGISTRY_PORT). The Kind nodes
+# resolve localhost:$(REGISTRY_PORT) through a containerd mirror, so the pods pull
+# from it without the images being loaded into the node. The cluster has to have
+# been created with the certs.d patch in hack/kind/cluster.yaml.
+REGISTRY_PORT ?= 5005
+# Checkouts images-all builds from; the defaults are siblings of this checkout.
+EVALHUB_REPO ?= $(abspath $(CURDIR)/../eval-hub)
+EVALHUB_CONTRIB_REPO ?= $(abspath $(CURDIR)/../eval-hub-contrib)
+LMES_REPO ?= $(abspath $(CURDIR)/../lm-evaluation-harness)
+# all, lmes, or a comma-separated list of eval-hub-contrib adapter directories.
+ADAPTERS ?= all
+# Image overrides deploy passes through the module operator. images-all writes
+# the same references to $(IMAGES_ENV_FILE).
+LMES_IMG ?=
+INSPECT_IMG ?=
+LIGHTEVAL_IMG ?=
+# Empty builds for the engine's host platform (linux/arm64 on Apple Silicon).
+PLATFORM ?=
+IMAGES_ENV_FILE ?= reports/images.env
+
+# `deploy-registry` re-invokes make with this set, so the references recorded by
+# `images-all` become the defaults for that deployment. An image variable on the
+# command line still wins, exactly like `make up ... TRUSTYAI_SERVICE_IMG=...`:
+# command-line definitions override the included file.
+ifneq ($(K8S_TESTS_REGISTRY_IMAGES),)
+-include $(IMAGES_ENV_FILE)
+endif
 
 # The EvalHub adapter checks are a section of their own: each one submits a real
 # benchmark, which fetches its dataset from the Hub and takes minutes, so
@@ -80,20 +118,23 @@ REPORT_FILE ?= reports/report.html
 ADAPTERS_MARKER ?= adapters
 ADAPTERS_REPORT_FILE ?= reports/adapters.html
 
-export KIND KUBECTL KIND_CLUSTER KUBE_CONTEXT NAMESPACE OPERATOR_REPO TAG \
-	WORKLOAD_IMG MODULE_IMG EVALHUB_IMG TRUSTYAI_SERVICE_IMG ENGINE TIMEOUT \
+export KIND KUBECTL KIND_CLUSTER KUBE_CONTEXT NAMESPACE OPERATOR_REPO TAG IMAGE_PREFIX \
+	WORKLOAD_IMG MODULE_IMG EVALHUB_IMG TRUSTYAI_SERVICE_IMG KUBE_RBAC_PROXY_IMG ENGINE TIMEOUT \
 	REPORT_FILE ADAPTERS_MARKER ADAPTERS_REPORT_FILE EMULATOR_IMG EMULATOR_NAMESPACE EMULATOR_TOKEN \
-	MODEL_URL MODEL_KEY MODEL_NAME KEEP_RESOURCES
+	MODEL_URL MODEL_KEY MODEL_NAME KEEP_RESOURCES \
+	REGISTRY_PORT KIND_PROVIDER EVALHUB_REPO EVALHUB_CONTRIB_REPO LMES_REPO ADAPTERS \
+	LMES_IMG INSPECT_IMG LIGHTEVAL_IMG PLATFORM IMAGES_ENV_FILE
 
 .PHONY: help
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_0-9-]+:.*## / {names[++n] = $$1; desc[n] = $$2; if (length($$1) > width) width = length($$1)} END {for (i = 1; i <= n; i++) printf "  \033[36m%-*s\033[0m %s\n", width, names[i], desc[i]}' $(MAKEFILE_LIST)
 
 .PHONY: cluster
-cluster: ## Create the Kind cluster (idempotent).
+cluster: ## Create the Kind cluster (idempotent), starting stopped nodes after a machine restart.
 	$(KIND_ENV) $(KIND) get clusters | grep -qx '$(KIND_CLUSTER)' || \
 		$(KIND_ENV) $(KIND) create cluster --name $(KIND_CLUSTER) --config $(KIND_CONFIG) \
 			$(if $(KIND_NODE_IMAGE),--image $(KIND_NODE_IMAGE)) --wait 5m
+	hack/start-cluster.sh
 	$(KUBECTL) --context $(KUBE_CONTEXT) wait --for=condition=Ready nodes --all --timeout $(TIMEOUT)
 
 .PHONY: cluster-delete
@@ -116,6 +157,18 @@ check-operator-repo:
 images: check-operator-repo ## Build the workload and module operator images from OPERATOR_REPO.
 	hack/build-images.sh
 
+.PHONY: images-all
+images-all: check-operator-repo ## Build every source image and push it to the local registry.
+	hack/build-all-images.sh
+
+.PHONY: deploy-registry
+deploy-registry: check-operator-repo ## Deploy with the images images-all pushed to the local registry.
+	@test -f $(IMAGES_ENV_FILE) || { echo "error: $(IMAGES_ENV_FILE) is missing; run make images-all first" >&2; exit 2; }
+	K8S_TESTS_REGISTRY_IMAGES=1 $(MAKE) deploy
+
+.PHONY: up-registry
+up-registry: cluster images-all deploy-registry ## Create the cluster, build and push every image, deploy.
+
 .PHONY: load
 load: ## Load the built images into the Kind cluster.
 	hack/load-images.sh
@@ -131,7 +184,7 @@ up: check-operator-repo cluster images load deploy ## Create the cluster, build,
 down: cluster-delete ## Delete the Kind cluster.
 
 .PHONY: clean
-clean: ## Delete the built operator images and the HTML report (leaves the cluster).
+clean: ## Delete the built images, the local registry and the HTML report (leaves the cluster).
 	hack/clean.sh
 
 .PHONY: test

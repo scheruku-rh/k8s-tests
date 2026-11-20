@@ -56,8 +56,88 @@ make deploy     # deploy the module operator, pointing it at the built images
 the flag when it is missing or does not look like an operator checkout.
 
 Tear the cluster down with `make down`; `make clean` also deletes the images
-the harness built and the HTML reports (`reports/`), without touching the
-cluster.
+the harness built, the local registry container `make images-all` starts, and the
+HTML reports (`reports/`, the `images.env` record of what was deployed included),
+without touching the cluster. With podman or Docker stopped it still removes the
+reports and leaves the images and the registry for a later run.
+
+### Building every image locally (local registry)
+
+`make images-all` builds every image the suite can build from source and pushes
+it to a `registry:2` container on `127.0.0.1:$(REGISTRY_PORT)` (5005). The Kind
+nodes pull from that registry through a containerd mirror, so nothing has to be
+loaded into the node. It builds:
+
+- the workload and module operator images from `OPERATOR_REPO`;
+- the EvalHub service image from `EVALHUB_REPO`;
+- every adapter image from `EVALHUB_CONTRIB_REPO` (`ADAPTERS=all`), or only the
+  adapters named in `ADAPTERS`;
+- the `lm_evaluation_harness` adapter the adapter checks use, from
+  `LMES_REPO/Dockerfile.lmes-job`.
+
+The three new repositories default to siblings of this checkout
+(`../eval-hub`, `../eval-hub-contrib`, `../lm-evaluation-harness`).
+
+```sh
+# Build and push everything, then deploy the stack with those images
+make images-all OPERATOR_REPO=/path/to/trustyai-service-operator
+make deploy-registry OPERATOR_REPO=/path/to/trustyai-service-operator
+
+# Or in one step: cluster + images-all + deploy-registry
+make up-registry OPERATOR_REPO=/path/to/trustyai-service-operator
+
+# Only the adapter the adapter checks need (much faster than ADAPTERS=all)
+make up-registry OPERATOR_REPO=/path/to/trustyai-service-operator ADAPTERS=lmes
+```
+
+`ADAPTERS=all` is the default and builds every eval-hub-contrib adapter plus
+`community-lmes`; several of them are large (the GuideLLM image alone is about
+7.5 GB), so `ADAPTERS=lmes` or a list of adapter directory names is the quick
+path. `images-all` writes the resulting references to `reports/images.env` and
+`deploy-registry` passes them to `make deploy`, which drops the references it
+does not use and marks the file as a record of what is running. The checks read
+that file when the image variables are not set, so `make test` after a registry
+deploy compares against the images that were pushed - and images that were built
+but never deployed do not make it compare against anything.
+
+`deploy-registry` and `up-registry` accept the same image variables as
+`deploy`/`up` (`WORKLOAD_IMG`, `MODULE_IMG`, `EVALHUB_IMG`,
+`TRUSTYAI_SERVICE_IMG`, `KUBE_RBAC_PROXY_IMG`, `LMES_IMG`, `INSPECT_IMG`,
+`LIGHTEVAL_IMG`). A value
+passed on the command line wins over the one recorded in `reports/images.env`,
+the same way `make up ... TRUSTYAI_SERVICE_IMG=<image>` overrides the operator's
+pin, and the references the deploy does not use are dropped from the file so the
+checks keep comparing against the ones it does.
+
+How the images reach the cluster:
+
+- `hack/build-all-images.sh` starts the registry on the `kind` container network,
+  publishes it on `127.0.0.1:$(REGISTRY_PORT)`, and writes
+  `/etc/containerd/certs.d/localhost:$(REGISTRY_PORT)/hosts.toml` on every node.
+  Pods that reference `localhost:$(REGISTRY_PORT)/...` pull from it over HTTP.
+- New clusters get the certs.d config path from `hack/kind/cluster.yaml`. A
+  cluster created before that patch has it enabled in place; set
+  `PATCH_CONTAINERD=false` to fail instead and recreate the cluster with
+  `make down`.
+- The build engine is the one that owns the Kind cluster (the cluster's node
+  containers decide it, and `KIND_PROVIDER` overrides that); with no cluster yet
+  podman is preferred. podman pushes to the plain-HTTP registry with
+  `--tls-verify=false`. With Docker, the daemon must allow the local registry
+  (`insecure-registries`) or the push fails with `server gave HTTP response to
+  HTTPS client`.
+- The registry container is reused between runs; `make clean` removes it, so
+  everything it held is gone - including an image you pushed to it by hand, such
+  as the kube-rbac-proxy build in Troubleshooting, which has to be pushed again
+  before the next `deploy`. It also removes the local copies of the images
+  `reports/images.env` records, and leaves the images under the registry prefix
+  that the file does not record in the engine's store alone. With podman or
+  Docker stopped it still removes `reports/` and leaves the images and the
+  registry for a later run.
+- On a small podman machine the adapter images fill the VM quickly. Pass
+  `REMOVE_AFTER_PUSH=true` to `images-all` to drop each local copy once it is
+  pushed (the registry keeps it), and prefer `ADAPTERS=lmes` over `ADAPTERS=all`
+  unless you have room for the heavy adapters (GuideLLM is ~7.5 GB, LightEval
+  and MTEB are larger).
 
 ### What `make deploy` does
 
@@ -184,9 +264,20 @@ a marker of your own belongs in `pyproject.toml` next to the others.
 | `MODULE_IMG` | `localhost/trustyai-operator-module:dev` | Module operator image reference |
 | `EVALHUB_IMG` | *(empty)* | EvalHub operand image; empty keeps the operator's own pin (`quay.io/evalhub/evalhub:latest`) |
 | `TRUSTYAI_SERVICE_IMG` | `quay.io/trustyai/trustyai-service:latest` | TrustyAI service operand image, passed through `RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_PY_IMAGE`; set it to a build under test |
+| `KUBE_RBAC_PROXY_IMG` | *(empty)* | kube-rbac-proxy sidecar image, passed through `RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE`; set it to an arm64 build of `opendatahub-io/kube-rbac-proxy` on Apple Silicon (see Troubleshooting) |
 | `TAG` | `dev` | Tag used by both image references |
 | `IMAGE_PREFIX` | `localhost` | Registry/repository prefix used by both image references |
-| `ENGINE` | auto | `podman` or `docker`; `docker` wins when both are installed, so set `ENGINE=podman` to build, save and remove the images with podman |
+| `REGISTRY_PORT` | `5005` | Host port of the registry `images-all` starts on the `kind` network |
+| `EVALHUB_REPO` | `../eval-hub` | Checkout `images-all` builds the EvalHub service image from |
+| `EVALHUB_CONTRIB_REPO` | `../eval-hub-contrib` | Checkout `images-all` builds the adapter images from |
+| `LMES_REPO` | `../lm-evaluation-harness` | Checkout `images-all` builds `community-lmes` from (`Dockerfile.lmes-job`) |
+| `ADAPTERS` | `all` | `all`, `lmes`, or a comma-separated list of eval-hub-contrib adapter directories |
+| `LMES_IMG` / `INSPECT_IMG` / `LIGHTEVAL_IMG` | *(empty)* | Adapter image overrides passed through the module operator (`RELATED_IMAGE_ODH_*`) |
+| `PLATFORM` | engine host platform | Platform the images are built for (`linux/arm64` on Apple Silicon) |
+| `IMAGES_ENV_FILE` | `reports/images.env` | Where `images-all` writes the image references and `deploy` and the checks read them |
+| `REMOVE_AFTER_PUSH` | *(empty)* | `images-all` removes each local image after pushing it; frees the podman machine's disk (incompatible with `SKIP_BUILD=true`) |
+| `PATCH_CONTAINERD` | `true` | Enable the certs.d config path in place on a cluster created before `hack/kind/cluster.yaml` had it |
+| `ENGINE` | auto | The engine that owns the Kind cluster (podman when there is no cluster yet); set it to force one |
 | `TIMEOUT` | `300s` | Timeout for each readiness wait |
 | `PYTEST_ARGS` | *(empty)* | Extra pytest arguments, e.g. `-m module`, `-m lmeval`, `-m adapters` or `-k evalhub` |
 | `REPORT_FILE` | `reports/report.html` | Report written by `make test` and `make test-all` |
@@ -197,6 +288,31 @@ The LLM emulator's `EMULATOR_IMG`, `EMULATOR_NAMESPACE` and `EMULATOR_TOKEN` are
 documented under [LLM emulator](#llm-emulator).
 
 ### Notes and troubleshooting
+
+- `make images-all` needs the local registry to be reachable from the nodes. If
+  a pod stays in `ImagePullBackOff` for a `localhost:$(REGISTRY_PORT)/...` image,
+  check `curl http://127.0.0.1:$(REGISTRY_PORT)/v2/_catalog`, that the
+  `k8s-tests-registry-<cluster>` container is running, and that
+  `/etc/containerd/certs.d/localhost:$(REGISTRY_PORT)/hosts.toml` exists in the
+  node (`podman exec <node> cat ...`).
+- With Docker as the engine, pushing to the plain-HTTP registry fails with
+  `server gave HTTP response to HTTPS client` unless the daemon lists it under
+  `insecure-registries`. The engine follows the cluster's provider, so a
+  podman-backed cluster (`KIND_PROVIDER=podman`) is the way to use podman's push
+  path; `ENGINE=podman` overrides the build engine when both are installed.
+- Creating a new Kind cluster on a rootless podman machine needs
+  `Delegate=yes` in the machine's systemd user slice (see the
+  [kind rootless documentation](https://kind.sigs.k8s.io/docs/user/rootless/)).
+  `images-all` can enable the containerd registry config path on an existing
+  cluster in place, so a cluster created before `hack/kind/cluster.yaml` had the
+  patch still works.
+- A build that fails with `no space left on device` is the podman machine's own
+  disk, not the Mac's. Check it with `podman system df` and
+  `podman machine ssh 'df -h /'`. `podman image prune -a -f` and
+  `podman builder prune -f` reclaim unused images and build cache,
+  `kind delete cluster --name <old-cluster>` frees the volumes of a cluster you
+  no longer need, and `podman machine set --disk-size 300` grows the disk (it
+  stops the machine first, so the clusters stop too).
 
 - `make up` leaves both operators running and no operands, so `make status` shows
   the module operator, the workload operator and no `EvalHub` instance. If the
@@ -214,13 +330,42 @@ documented under [LLM emulator](#llm-emulator).
   `ta-lmes-driver` in the same overlay. On an arm64 host, such as an Apple Silicon
   laptop, the operand pods stay in `ImagePullBackOff` (`no match for platform in
   manifest`) and the rollout wait fails with the pod's reason in the timeout
-  message. Point the run at an amd64 cluster, or give the module operator an arm64
-  build of the proxy through `RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE`
-  (`kubectl -n system set env deployment/trustyai-operator-module-controller-manager
-  RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE=<ref>`, then touch the module resource so
-  the workload operator is rendered again). The upstream
+  message. Point the run at an amd64 cluster, or build the proxy for the host
+  platform from `opendatahub-io/kube-rbac-proxy` and pass it to the module
+  operator, which renders it into the workload operator:
+
+  ```bash
+  git clone --depth 1 https://github.com/opendatahub-io/kube-rbac-proxy /tmp/kube-rbac-proxy
+  cd /tmp/kube-rbac-proxy
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o _output/kube-rbac-proxy-linux-arm64 \
+      ./cmd/kube-rbac-proxy
+  podman build --platform linux/arm64 \
+      --build-arg BINARY=kube-rbac-proxy-linux-arm64 --build-arg GOARCH=arm64 \
+      --build-arg BASEIMAGE=gcr.io/distroless/static:nonroot-arm64 \
+      -t localhost:5005/odh-kube-rbac-proxy:dev .
+  podman push --tls-verify=false localhost:5005/odh-kube-rbac-proxy:dev
+  ```
+
+  `docker` works too, but needs `--load` on the build (buildx's `docker-container`
+  driver otherwise leaves the image only in its cache) and `localhost:5005` in the
+  daemon's `insecure-registries` for the push; podman, what a podman-backed Kind
+  cluster uses, needs neither.
+
+  then deploy with `KUBE_RBAC_PROXY_IMG=localhost:5005/odh-kube-rbac-proxy:dev`
+  (`make deploy ...` or `make up ...`). The variable becomes the module
+  operator's `RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE`, and `make deploy` waits
+  until the workload operator renders it. The upstream
   `quay.io/brancz/kube-rbac-proxy` is multi-arch but lacks the ODH
   `--tls-curve-preferences` flag, so it cannot stand in for it.
+- Any `LMEvalJob` on the cluster keeps the module resource `Ready=False`
+  (`LMES: ... operand status is not yet available`): the module operator's
+  operand health check reads `status.conditions[type=Ready]` and `status.phase`,
+  while an `LMEvalJob` reports success as `status.state: Complete`. That includes
+  the deliberately unschedulable job the `lmeval` checks create, so a
+  `KEEP_RESOURCES` run leaves the module not ready for every later run. Delete
+  the leftover namespaces (`kubectl get ns -o name | grep -E 'trustyai-lmeval|trustyai-evalhub|trustyai-service' | xargs -r kubectl delete`)
+  before re-running, or expect that one condition to stay in the failure message
+  until the job's finalizer has run.
 - On hosts without the `docker` CLI the harness exports each image with
   `podman save` and loads it with `kind load image-archive`, since
   `kind load docker-image` always shells out to `docker`.

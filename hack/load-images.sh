@@ -10,9 +10,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 engine=$(container_engine)
-kind="${KIND:-kind}"
-name="${KIND_CLUSTER:-kind}"
-[[ -n "${KIND_PROVIDER:-}" ]] && export KIND_EXPERIMENTAL_PROVIDER="$KIND_PROVIDER"
+name="${KIND_CLUSTER:-trustyai}"
 
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
@@ -22,7 +20,7 @@ for image in "$WORKLOAD_IMG" "$MODULE_IMG"; do
 	info "exporting $image with $engine"
 	"$engine" save -o "$archive" "$image"
 	info "loading $image into Kind cluster $name"
-	"$kind" load image-archive --name "$name" "$archive"
+	kind_cmd load image-archive --name "$name" "$archive"
 done
 
 info "loaded both operator images into $name"

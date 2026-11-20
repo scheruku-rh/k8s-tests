@@ -2,5 +2,15 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 # A single control-plane node is enough for the operator stack. Set
 # KIND_NODE_IMAGE to pin the node image (for example kindest/node:v1.29.0).
+#
+# The certs.d config path is what lets `make images-all` publish locally built
+# images to a registry container and have the node pull them over plain HTTP:
+# hack/build-all-images.sh writes a hosts.toml per node under
+# /etc/containerd/certs.d/localhost:<port>. A cluster created before this patch
+# has to be recreated (make down) before the local registry can be used.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 nodes:
   - role: control-plane
