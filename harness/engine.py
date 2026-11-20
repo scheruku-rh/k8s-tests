@@ -14,7 +14,10 @@ ENGINES = ("podman", "docker")
 def cluster_owner_engine(settings: Settings) -> str:
     """The engine that has this cluster's node containers, or "" when neither does."""
     for engine in ENGINES:
-        if not succeeded([engine, "info"]):
+        # Only ask the engines this host has: probing the other one raises ENOENT
+        # rather than answering "no cluster" (docker is not installed on podman-only
+        # hosts, and the probe runs on every kind command).
+        if which(engine) is None or not succeeded([engine, "info"]):
             continue
         listed = output(
             [engine, "ps", "--all", "--quiet", "--filter", f"label=io.x-k8s.kind.cluster={settings.kind_cluster}"],

@@ -96,3 +96,36 @@ def test_certs_d_patching_can_be_refused():
     assert registry.patch_containerd_enabled(Settings(patch_containerd="true"))
     assert not registry.patch_containerd_enabled(Settings(patch_containerd="0"))
     assert not registry.patch_containerd_enabled(Settings(patch_containerd="false"))
+
+
+def test_an_engine_that_is_not_installed_is_never_probed(monkeypatch):
+    """`docker` is absent on a podman-only host; probing it raises ENOENT, not "no cluster"."""
+    probed: list[str] = []
+
+    def installed(name: str) -> str | None:
+        return "/usr/bin/podman" if name == "podman" else None
+
+    def answered(command: list[object], **kwargs: object) -> bool:
+        probed.append(str(command[0]))
+        return False
+
+    monkeypatch.setattr(engine, "which", installed)
+    monkeypatch.setattr(engine, "succeeded", answered)
+    assert engine.cluster_owner_engine(Settings()) == ""
+    assert probed == ["podman"]
+
+
+def test_the_engine_owning_the_cluster_wins(monkeypatch):
+    monkeypatch.setattr(engine, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(engine, "succeeded", lambda command, **kwargs: True)
+    monkeypatch.setattr(engine, "output", lambda command, **kwargs: "trustyai-control-plane")
+    assert engine.cluster_owner_engine(Settings()) == "podman"
+
+
+def test_an_engine_is_still_chosen_when_no_cluster_owns_one(monkeypatch):
+    """The regression: `k8s-tests down` on a host without docker raised FileNotFoundError."""
+    monkeypatch.setattr(engine, "which", lambda name: "/usr/bin/podman" if name == "podman" else None)
+    monkeypatch.setattr(engine, "succeeded", lambda command, **kwargs: str(command[0]) == "podman")
+    monkeypatch.setattr(engine, "output", lambda command, **kwargs: "")
+    assert engine.cluster_owner_engine(Settings()) == ""
+    assert engine.container_engine(Settings()) == "podman"
