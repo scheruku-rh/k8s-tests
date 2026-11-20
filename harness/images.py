@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from harness import registry
+from harness.arch import MODULE_DIR, deploys_module_operator, operator_images, operator_repo, require_operator_repo
 from harness.config import Settings, record_lines
 from harness.engine import (
     build,
@@ -28,28 +29,15 @@ from harness.engine import (
 )
 from harness.shell import HarnessError, environment, info, output, run, warn
 
-MODULE_DIR = "trustyai-operator-module"
 LMES_DOCKERFILE = "Dockerfile.lmes-job"
 
 
-def operator_repo(settings: Settings) -> Path:
-    """The trustyai-service-operator checkout, checked for the files the build needs."""
-    if not settings.operator_repo:
-        raise HarnessError(
-            "OPERATOR_REPO must point at a trustyai-service-operator checkout, "
-            "for example --operator-repo /path/to/trustyai-service-operator"
-        )
-    repo = Path(settings.operator_repo).expanduser()
-    if not repo.is_dir():
-        raise HarnessError(f"OPERATOR_REPO={repo} does not exist")
-    if not (repo / "Dockerfile").is_file() or not (repo / MODULE_DIR / "Dockerfile").is_file():
-        raise HarnessError(f"{repo} does not look like a trustyai-service-operator checkout")
-    return repo
-
-
 def check_operator_repo(settings: Settings) -> None:
-    """Report the checkout this run builds and deploys from."""
+    """Report the checkout this run builds and deploys from, and the layout it has."""
+    from harness.arch import arch_source, operator_arch
+
     info(f"{operator_repo(settings)} is a trustyai-service-operator checkout")
+    info(f"layout: {operator_arch(settings)} ({arch_source(settings)})")
 
 
 def trees_differ(left: Path, right: Path) -> bool:
@@ -73,13 +61,25 @@ def warn_on_stale_template(settings: Settings) -> None:
 
 
 def images(settings: Settings) -> list[str]:
-    """The two operator images a load-path run builds."""
-    return [settings.workload_img, settings.module_img]
+    """The operator images this layout builds."""
+    return operator_images(settings)
 
 
 def build_operators(settings: Settings) -> None:
-    """Build the workload and module operator images from OPERATOR_REPO."""
-    repo = operator_repo(settings)
+    """Build the operator images this layout needs from OPERATOR_REPO."""
+    repo = require_operator_repo(settings)
+    if operator_images(settings) == [settings.workload_img]:
+        build(
+            settings,
+            settings.workload_img,
+            repo,
+            repo / "Dockerfile",
+            "--build-arg",
+            f"CI_CONTAINER_VERSION={settings.tag}",
+        )
+        info(f"built {settings.workload_img} (single-operator layout: there is no module operator image)")
+        return
+
     module = repo / MODULE_DIR
     warn_on_stale_template(settings)
     build(
@@ -121,7 +121,7 @@ def load(settings: Settings) -> None:
             save(settings, image, archive)
             info(f"loading {image} into Kind cluster {settings.kind_cluster}")
             run([settings.kind, "load", "image-archive", "--name", settings.kind_cluster, archive], env=kind_env)
-    info(f"loaded both operator images into {settings.kind_cluster}")
+    info(f"loaded {len(built)} operator image(s) into {settings.kind_cluster}")
 
 
 def require_cluster(settings: Settings) -> None:
@@ -213,14 +213,19 @@ def images_all(settings: Settings) -> None:
 
     workload = registry.registry_reference(settings, "trustyai-service-operator")
     module = registry.registry_reference(settings, "trustyai-operator-module")
+    operator_names = [workload]
+    if deploys_module_operator(settings):
+        operator_names.append(module)
     if settings.skip_build:
-        require_present(settings, (workload, module))
+        require_present(settings, tuple(operator_names))
     else:
         build_operators(settings.with_updates(workload_img=workload, module_img=module))
-    for image in (workload, module):
+    for image in operator_names:
         push_and_maybe_remove(settings, image)
-    built += [workload, module]
-    recorded.update(WORKLOAD_IMG=workload, MODULE_IMG=module)
+    built += operator_names
+    recorded["WORKLOAD_IMG"] = workload
+    if deploys_module_operator(settings):
+        recorded["MODULE_IMG"] = module
 
     evalhub = registry.registry_reference(settings, "evalhub/evalhub")
     if settings.skip_build:
@@ -329,7 +334,6 @@ __all__ = [
     "images",
     "images_all",
     "load",
-    "operator_repo",
     "require_checkout",
     "require_cluster",
     "trees_differ",

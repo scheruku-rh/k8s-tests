@@ -5,38 +5,39 @@ from __future__ import annotations
 import pytest
 
 from harness import images
+from harness.arch import require_operator_repo
 from harness.config import Settings
 from harness.shell import HarnessError
 
 
 def operator_checkout(tmp_path):
-    """A directory that looks like a trustyai-service-operator checkout."""
-    (tmp_path / images.MODULE_DIR).mkdir()
+    """A directory that looks like a modular trustyai-service-operator checkout."""
+    (tmp_path / "trustyai-operator-module").mkdir()
     (tmp_path / "Dockerfile").write_text("FROM scratch\n")
-    (tmp_path / images.MODULE_DIR / "Dockerfile").write_text("FROM scratch\n")
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "manager.yaml").write_text("kind: Deployment\n")
+    (tmp_path / "trustyai-operator-module" / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "config" / "default").mkdir(parents=True)
+    (tmp_path / "config" / "default" / "kustomization.yaml").write_text("resources: []\n")
     return tmp_path
 
 
 def test_the_checkout_is_required():
     with pytest.raises(HarnessError, match="OPERATOR_REPO must point at"):
-        images.operator_repo(Settings())
+        require_operator_repo(Settings())
 
 
 def test_a_missing_checkout_is_an_error(tmp_path):
     with pytest.raises(HarnessError, match="does not exist"):
-        images.operator_repo(Settings(operator_repo=str(tmp_path / "absent")))
+        require_operator_repo(Settings(operator_repo=str(tmp_path / "absent")))
 
 
 def test_a_directory_that_is_not_an_operator_checkout_is_refused(tmp_path):
     with pytest.raises(HarnessError, match="does not look like"):
-        images.operator_repo(Settings(operator_repo=str(tmp_path)))
+        require_operator_repo(Settings(operator_repo=str(tmp_path)))
 
 
 def test_a_checkout_that_has_the_layout_is_accepted(tmp_path):
     repo = operator_checkout(tmp_path)
-    assert images.operator_repo(Settings(operator_repo=str(repo))) == repo
+    assert require_operator_repo(Settings(operator_repo=str(repo))) == repo
 
 
 def test_two_trees_are_compared_in_content_and_members(tmp_path):
