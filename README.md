@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo-k8s-tests.png" alt="k8s-tests" width="220">
+</p>
+
 # k8s-tests
 
 [![Python lint](https://github.com/trustyai-explainability/k8s-tests/actions/workflows/python-lint.yaml/badge.svg?branch=main)](https://github.com/trustyai-explainability/k8s-tests/actions/workflows/python-lint.yaml)

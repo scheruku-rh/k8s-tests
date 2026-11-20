@@ -35,7 +35,8 @@ packages = ["harness", "utilities"]
 "conftest.py" = "harness/data/conftest.py"
 "pyproject.toml" = "harness/data/pyproject.toml"
 "hack" = "harness/data/hack"
-"docs" = "harness/data/docs"
+# Only the report logo: the README's own logo has no business in the wheel.
+"docs/trustyai.png" = "harness/data/docs/trustyai.png"
 
 [project.optional-dependencies]
 # What `lint` and `fmt` shell out to; only a checkout needs them.
