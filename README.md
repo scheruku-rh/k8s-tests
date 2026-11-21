@@ -59,7 +59,10 @@ k8s-tests deploy     # deploy the module operator, pointing it at the built imag
 ```
 
 `up`, `images`, `images-all` and `deploy` require `OPERATOR_REPO` and stop with a pointer
-to the flag when it is missing or does not look like an operator checkout.
+to the flag when it is missing or does not look like an operator checkout. `load` reads the
+layout from that checkout to know how many images it loaded, so it takes `OPERATOR_REPO`
+too, or `--operator-arch single|modular` when the checkout is not at hand; with neither it
+stops rather than reading the layout out of the current directory.
 
 Tear the cluster down with `k8s-tests down`. `k8s-tests clean` also deletes the images
 the harness built, the local registry container `images-all` starts, and the HTML

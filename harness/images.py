@@ -109,7 +109,18 @@ def load(settings: Settings) -> None:
     `kind load docker-image` shells out to docker even on the podman provider, so export
     each image and hand Kind the archive. One archive per image: `podman save` collapses
     several into a single manifest entry and would load the first under every tag.
+
+    How many images there are is the layout's answer, and the layout comes from the
+    checkout. With neither a checkout nor a declared layout the paths below resolve
+    against the current directory, so a module tree that happens to sit there would pick
+    the modular layout for images built somewhere else; it is refused instead.
     """
+    if not settings.operator_repo and not settings.operator_arch:
+        raise HarnessError(
+            "OPERATOR_REPO is not set and no layout is declared, so there is no telling which operator "
+            "images this run built; pass --operator-repo, or --operator-arch single|modular when the "
+            "checkout is not at hand"
+        )
     built = images(settings)
     missing = [image for image in built if not image_present(settings, image)]
     if missing:

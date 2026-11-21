@@ -97,7 +97,24 @@ def test_building_the_load_path_images_clears_the_record(tmp_path, monkeypatch):
 def test_loading_refuses_images_the_engine_does_not_have(tmp_path, monkeypatch):
     monkeypatch.setattr(images, "image_present", lambda settings, image: False)
     with pytest.raises(HarnessError, match="k8s-tests images"):
+        images.load(Settings(operator_arch="single"))
+
+
+def test_loading_does_not_read_the_layout_from_the_current_directory(tmp_path, monkeypatch):
+    """A module tree under the cwd is not a configured checkout, and must not pick the layout."""
+    (tmp_path / "trustyai-operator-module").mkdir()
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(HarnessError, match="OPERATOR_REPO is not set"):
         images.load(Settings())
+
+
+def test_loading_a_single_layout_checkout_takes_one_image(tmp_path, monkeypatch):
+    loaded: list[str] = []
+    monkeypatch.setattr(images, "image_present", lambda settings, image: True)
+    monkeypatch.setattr(images, "save", lambda settings, image, archive: loaded.append(image))
+    monkeypatch.setattr(images, "run", lambda command, **kwargs: None)
+    images.load(Settings(operator_repo=str(tmp_path), operator_arch="single"))
+    assert loaded == [Settings().workload_img]
 
 
 def test_a_registry_checkout_that_is_missing_is_an_error():
