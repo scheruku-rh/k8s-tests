@@ -298,11 +298,24 @@ def apply_overlay(settings: Settings, workdir: Path) -> None:
     clusterrole-aggregation-controller owns and rewrites from the aggregation labels. A
     re-deploy therefore conflicts on that field alone, and forcing it is what a second
     `deploy` has always needed; the first one applies cleanly and never gets here.
+
+    kubectl reports that conflict on standard error and exits non-zero, leaving standard
+    output empty, so the output is read combined and neither stream can hide it.
     """
-    applied = kube(settings, "apply", "-k", workdir, "--server-side=true", check=False, capture=True)
+    applied = kube(settings, "apply", "-k", workdir, "--server-side=true", check=False, capture=True, combined=True)
     if "conflict" not in applied.lower():
         return
-    ran = kube(settings, "apply", "-k", workdir, "--server-side=true", "--force-conflicts", check=False, capture=True)
+    ran = kube(
+        settings,
+        "apply",
+        "-k",
+        workdir,
+        "--server-side=true",
+        "--force-conflicts",
+        check=False,
+        capture=True,
+        combined=True,
+    )
     if "conflict" in ran.lower():
         raise HarnessError(f"deploying {workdir} conflicts with another manager: {ran.strip()[:400]}")
     warn("re-applied with --force-conflicts: an aggregated ClusterRole's rules belong to its aggregator")

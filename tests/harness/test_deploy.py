@@ -119,6 +119,34 @@ def test_a_forced_reapply_reports_what_it_took_over(tmp_path, monkeypatch):
     assert "--force-conflicts" in calls[1]
 
 
+def test_a_conflict_kubectl_reports_on_stderr_is_forced(tmp_path, monkeypatch):
+    """kubectl puts a server-side apply's field conflict on stderr and exits non-zero."""
+    import subprocess
+
+    from harness import cluster
+    from harness import deploy as deploy_module
+
+    runs: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        argv = [str(part) for part in command]
+        runs.append(argv)
+        if "--force-conflicts" in argv:
+            return subprocess.CompletedProcess(argv, 0, "clusterrole/x serverside-applied", "")
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            "",
+            'Apply failed with 1 conflict: conflict with "clusterrole-aggregation-controller": .rules',
+        )
+
+    monkeypatch.setattr(cluster, "run", fake_run)
+    deploy_module.apply_overlay(Settings(), tmp_path)
+    assert len(runs) == 2
+    assert "--force-conflicts" not in runs[0]
+    assert "--force-conflicts" in runs[1]
+
+
 def test_a_clean_apply_is_not_forced(tmp_path, monkeypatch):
     from harness import deploy as deploy_module
 
