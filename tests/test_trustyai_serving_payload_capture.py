@@ -8,7 +8,8 @@ require to be absent:
 - `tests/test_trustyai_serving_optional.py` (marker `isvc_free`) asserts the stack works
   with no serving API, and skips if one is installed;
 - this module (marker `tas_payload`) installs the checkout's stand-in, writes a mock
-  InferenceService, and takes the CRD back off the cluster when it is done.
+  InferenceService - a predictor KServe's webhook admits, which nothing serves - and takes
+  the CRD back off the cluster when it is done.
 
 The operator registers no source for `serving.kserve.io` on purpose - a watch on a kind
 nothing serves would keep it from starting - so it learns about an InferenceService on its

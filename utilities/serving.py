@@ -83,6 +83,11 @@ SERVING_PLURAL = "inferenceservices"
 DEPLOYMENT_MODE_ANNOTATION = "serving.kserve.io/deploymentMode"
 DEPLOYMENT_MODE_RAW = "RawDeployment"
 
+# The predictor a check writes: a shape KServe's validating webhook admits, pointing at a
+# place no model server in this harness reads.
+MOCK_MODEL_FORMAT = "sklearn"
+MOCK_MODEL_STORAGE_URI = "s3://k8s-tests/mock-model"
+
 # The one field payload capture writes, and the annotations KServe writes beside it.
 LOGGER_FIELD_PATH = ("spec", "predictor", "logger")
 LOGGER_MODE_ALL = "all"
@@ -263,11 +268,15 @@ def remove_serving_api(api_client: client.ApiClient, timeout: int = 120, interva
 
 
 def mock_inference_service(name: str, annotations: dict[str, str] | None = None) -> dict[str, Any]:
-    """The smallest InferenceService that is a valid object and a RawDeployment.
+    """The smallest InferenceService that is a valid object, a RawDeployment, and served by nothing.
 
-    `spec.predictor` is the only thing the CRD requires of it, and the operator only reads
-    the object's annotations and its logger, so nothing else is filled in: a mock that was
-    a working predictor would need a model server this harness does not run.
+    The operator reads only the object's annotations and the logger it writes, so the
+    predictor exists to be a predictor and not to do anything: an empty one is legal under
+    the stand-in CRD, whose schema requires no property of `spec.predictor`, but a real
+    KServe installation puts a validating webhook in front of the same kind and denies it.
+    `model` with a format and a storage URI is the shape KServe's own samples use and its
+    webhook admits, so this object configures the same way wherever the API is real. Nothing
+    here pulls the model: the harness runs no model server.
     """
     return {
         "apiVersion": f"{SERVING_GROUP}/{SERVING_VERSION}",
@@ -276,7 +285,14 @@ def mock_inference_service(name: str, annotations: dict[str, str] | None = None)
             "name": name,
             "annotations": {DEPLOYMENT_MODE_ANNOTATION: DEPLOYMENT_MODE_RAW, **(annotations or {})},
         },
-        "spec": {"predictor": {}},
+        "spec": {
+            "predictor": {
+                "model": {
+                    "modelFormat": {"name": MOCK_MODEL_FORMAT},
+                    "storageUri": MOCK_MODEL_STORAGE_URI,
+                }
+            }
+        },
     }
 
 
