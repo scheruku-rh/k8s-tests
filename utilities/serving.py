@@ -168,8 +168,9 @@ def rules_for_deployment(
     """Every policy rule the named Deployment's ServiceAccount is bound to.
 
     Both binding kinds are read, because an operator installed by a platform and one
-    installed by this harness need not agree on which they get, and the roles are
-    resolved through each binding's own `roleRef` rather than by name.
+    installed by this harness need not agree on which they get, and a namespaced binding can
+    grant a ClusterRole as well as a Role, so each binding's own `roleRef.kind` decides what
+    is read back rather than its name.
     """
     deployment = apps_client.read_namespaced_deployment(name=name, namespace=namespace)
     service_account = deployment.spec.template.spec.service_account_name
@@ -182,8 +183,14 @@ def rules_for_deployment(
     for binding in rbac_client.list_namespaced_role_binding(namespace=namespace).items:
         if not _binds(binding.subjects, service_account, namespace):
             continue
-        role = rbac_client.read_namespaced_role(name=binding.role_ref.name, namespace=namespace)
-        rules.extend(role.rules or [])
+        if binding.role_ref.kind == "ClusterRole":
+            # The grant is cluster-scoped; reading a namespaced Role of that name would
+            # either find nothing or find an unrelated role, and either way the rules would
+            # be dropped from what the caller believes the ServiceAccount holds.
+            rules.extend(rbac_client.read_cluster_role(name=binding.role_ref.name).rules or [])
+        else:
+            role = rbac_client.read_namespaced_role(name=binding.role_ref.name, namespace=namespace)
+            rules.extend(role.rules or [])
     return rules
 
 
