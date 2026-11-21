@@ -266,11 +266,21 @@ def wait_for_replacement_pods(
 
 
 def _is_ready(pod: client.V1Pod) -> bool:
-    """Whether the pod is running every container it asks for and is not being deleted."""
+    """Whether the pod reports Ready and is not being deleted.
+
+    The Pod's own condition, not only its containers: that is what the Deployment
+    controller counts as a ready replica, so a wait built on container statuses alone can
+    accept a pod the rollout wait after it will not count - a Pod with a readiness gate its
+    controller has not satisfied has every container ready and is still not Ready - and the
+    two would disagree about the same restart.
+    """
     if pod.metadata.deletion_timestamp is not None:
         return False
     statuses = pod.status.container_statuses or []
-    return bool(statuses) and all(status.ready for status in statuses)
+    if not statuses or not all(status.ready for status in statuses):
+        return False
+    conditions = pod.status.conditions or []
+    return any(condition.type == "Ready" and condition.status == "True" for condition in conditions)
 
 
 def wait_for_deployment_available(
