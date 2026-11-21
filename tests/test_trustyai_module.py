@@ -46,6 +46,7 @@ from utilities.trustyai import (
     expected_image_from_env,
     module_api_version,
     module_conditions,
+    wait_for_module_condition,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -102,11 +103,21 @@ def test_module_reports_an_installed_serving_api(dynamic_client: DynamicClient, 
 
     The absence is what `--section isvc-free` covers; this is the state a platform that
     does install serving reports, and it is skipped on the clusters that section runs on.
+
+    The condition is waited for rather than `Ready`: `Ready` aggregates the health of every
+    enabled service's operand instances, so it is `False` while any `TrustyAIService` is
+    unready - and on Kind one always is, because it wants a Route - which has nothing to do
+    with whether the serving API was noticed.
     """
     if not serving_api_installed(api_client):
         pytest.skip(f"{SERVING_CRD_NAME} is not installed; the serving integration is inactive on this cluster")
 
-    module = assert_module_ready(dynamic_client=dynamic_client, api_version=module_api_version(api_client))
+    module = wait_for_module_condition(
+        dynamic_client=dynamic_client,
+        api_version=module_api_version(api_client),
+        condition_type=MODULE_CONDITION,
+        status="True",
+    )
     reported = module_conditions(module).get(MODULE_CONDITION)
     LOGGER.info("%s reports %s: %s", MODULE_CRD_NAME, MODULE_CONDITION, describe(reported))
 

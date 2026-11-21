@@ -55,10 +55,9 @@ from utilities.serving import (
 )
 from utilities.trustyai import (
     MODULE_CR_NAME,
-    assert_module_ready,
     module_api_version,
     module_conditions,
-    read_module,
+    wait_for_module_condition,
 )
 from utilities.trustyai_service import API_GROUP, PLURAL, STORAGE_VERSION, ServiceAddress, condition, read_service
 
@@ -178,28 +177,35 @@ def test_the_service_condition_reports_the_serving_api_present(
 def test_the_module_notices_the_api_appearing(
     serving_api: bool, dynamic_client: DynamicClient, api_client: client.ApiClient
 ) -> None:
-    """The module operator re-reads the API every pass, so installing it needs no restart."""
+    """The module operator re-reads the API every pass, so installing it needs no restart.
+
+    The subject is that one condition, and only that one: the module's `Ready` aggregates
+    the health of every enabled service's operand instances, and a `TrustyAIService` on
+    Kind is never ready - it wants a Route an OpenShift router would admit - so `Ready` is
+    `False` for as long as this module's own service exists. Asserting it here would fail
+    on a stack that is working exactly as designed.
+    """
     LOGGER.info("this module installed the serving API: %s", serving_api)
     api_version = module_api_version(api_client)
-    deadline = time.monotonic() + SERVING_TIMEOUT
-    while True:
-        module = read_module(dynamic_client, api_version)
-        reported = module_conditions(module).get(MODULE_CONDITION)
-        if reported is not None and reported.get("status") == "True":
-            break
-        if time.monotonic() >= deadline:
-            pytest.fail(
-                f"{MODULE_CR_NAME} still reports {describe(reported)} {SERVING_TIMEOUT}s after the serving API "
-                "was installed; the module operator re-derives it on every pass and needs no restart",
-                pytrace=False,
-            )
-        LOGGER.info("waiting for %s to report the installed API: %s", MODULE_CR_NAME, describe(reported))
-        time.sleep(10)
-
-    assert reported.get("reason") == REASON_AVAILABLE, (
-        f"{MODULE_CONDITION} reason is {reported.get('reason')!r}, expected {REASON_AVAILABLE!r}: {describe(reported)}"
+    module = wait_for_module_condition(
+        dynamic_client=dynamic_client,
+        api_version=api_version,
+        condition_type=MODULE_CONDITION,
+        status="True",
+        timeout=SERVING_TIMEOUT,
     )
-    assert_module_ready(dynamic_client, api_version)
+    reported = module_conditions(module).get(MODULE_CONDITION)
+    LOGGER.info("%s reports %s: %s", MODULE_CR_NAME, MODULE_CONDITION, describe(reported))
+
+    assert reported is not None and reported.get("reason") == REASON_AVAILABLE, (
+        f"{MODULE_CONDITION} reason is {reported and reported.get('reason')!r}, expected {REASON_AVAILABLE!r}: "
+        f"{describe(reported)}"
+    )
+    generation = (module.get("metadata") or {}).get("generation")
+    assert reported.get("observedGeneration") == generation, (
+        f"{MODULE_CONDITION} was observed at generation {reported.get('observedGeneration')}, "
+        f"the resource is at {generation}: the condition is from an older spec"
+    )
 
 
 def test_the_logger_is_not_rewritten(captured: dict[str, object], custom_api: client.CustomObjectsApi) -> None:

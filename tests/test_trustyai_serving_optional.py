@@ -200,7 +200,14 @@ def test_module_does_not_report_a_failed_precondition_for_serving(module: dict) 
 
 
 def test_module_is_ready_without_serving(dynamic_client: DynamicClient, api_client: client.ApiClient) -> None:
-    """Nothing about the optional API gates readiness, so the module is ready all the same."""
+    """Nothing about the optional API gates readiness, so the module is ready all the same.
+
+    `Ready` aggregates the health of every enabled service's operand instances, so this
+    check has to run before the module creates one: a `TrustyAIService` on Kind is never
+    ready - it wants a Route an OpenShift router would admit - and the module would then be
+    `Not Ready` for a reason that has nothing to do with serving. That is the order the
+    checks in this file keep, and the order the report runs them in.
+    """
     module = assert_module_ready(dynamic_client, module_api_version(api_client))
     assert_module_provisioning_succeeded(module)
 
