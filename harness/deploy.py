@@ -9,6 +9,7 @@ operands on top - EvalHub instances, TrustyAIService, the jobs - are the tests' 
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import yaml
 from kubernetes.client.exceptions import ApiException
 
 from harness import arch
-from harness.cluster import kube
+from harness.cluster import kube, kube_result
 from harness.config import (
     IMAGES_ENV_DEPLOYED_MARKER,
     Settings,
@@ -291,6 +292,11 @@ def deploy_modular(settings: Settings, workdir: Path) -> None:
     ensure_tls_secrets(settings, workdir)
 
 
+def _apply_output(applied: subprocess.CompletedProcess[str]) -> str:
+    """What kubectl said about an apply, from either stream: a conflict goes to stderr."""
+    return "\n".join(part for part in ((applied.stdout or "").strip(), (applied.stderr or "").strip()) if part)
+
+
 def apply_overlay(settings: Settings, workdir: Path) -> None:
     """Apply a rendered tree server-side, taking ownership of fields another manager holds.
 
@@ -299,25 +305,25 @@ def apply_overlay(settings: Settings, workdir: Path) -> None:
     re-deploy therefore conflicts on that field alone, and forcing it is what a second
     `deploy` has always needed; the first one applies cleanly and never gets here.
 
-    kubectl reports that conflict on standard error and exits non-zero, leaving standard
-    output empty, so the output is read combined and neither stream can hide it.
+    The exit status decides what happened and the text only says why: a conflict is the
+    one failure that can be recovered from, and it is reported on standard error, so both
+    streams are read. Anything else stops the run rather than reading as a clean apply,
+    which is what a failure with no conflict in its output otherwise looks like.
     """
-    applied = kube(settings, "apply", "-k", workdir, "--server-side=true", check=False, capture=True, combined=True)
-    if "conflict" not in applied.lower():
+    applied = kube_result(settings, "apply", "-k", workdir, "--server-side=true")
+    output = _apply_output(applied)
+    if applied.returncode == 0:
         return
-    ran = kube(
-        settings,
-        "apply",
-        "-k",
-        workdir,
-        "--server-side=true",
-        "--force-conflicts",
-        check=False,
-        capture=True,
-        combined=True,
-    )
-    if "conflict" in ran.lower():
-        raise HarnessError(f"deploying {workdir} conflicts with another manager: {ran.strip()[:400]}")
+    if "conflict" not in output.lower():
+        raise HarnessError(f"applying {workdir} failed with exit status {applied.returncode}: {output[:400]}")
+    ran = kube_result(settings, "apply", "-k", workdir, "--server-side=true", "--force-conflicts")
+    retried = _apply_output(ran)
+    if ran.returncode != 0:
+        if "conflict" in retried.lower():
+            raise HarnessError(f"deploying {workdir} conflicts with another manager: {retried[:400]}")
+        raise HarnessError(
+            f"re-applying {workdir} with --force-conflicts failed with exit status {ran.returncode}: {retried[:400]}"
+        )
     warn("re-applied with --force-conflicts: an aggregated ClusterRole's rules belong to its aggregator")
 
 

@@ -94,25 +94,22 @@ def test_deploying_the_registry_record_applies_it(tmp_path, monkeypatch):
 
 def test_a_forced_reapply_reports_what_it_took_over(tmp_path, monkeypatch):
     """A pre-module checkout's aggregated ClusterRole is co-owned, so a re-deploy conflicts."""
+    import subprocess
+
     from harness import deploy as deploy_module
 
     calls: list[list[str]] = []
 
-    class Result:
-        def __init__(self, text: str) -> None:
-            self.stdout = text
-            self.stderr = ""
-            self.returncode = 0
+    def kube_result(settings, *args, **kwargs):
+        argv = [str(argument) for argument in args]
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                argv, 1, 'Apply failed with 1 conflict: conflict with "clusterrole-aggregation-controller"', ""
+            )
+        return subprocess.CompletedProcess(argv, 0, "", "")
 
-    def kube(settings, *args, **kwargs):
-        calls.append([str(argument) for argument in args])
-        return (
-            'Apply failed with 1 conflict: conflict with "clusterrole-aggregation-controller"'
-            if len(calls) == 1
-            else ""
-        )
-
-    monkeypatch.setattr(deploy_module, "kube", kube)
+    monkeypatch.setattr(deploy_module, "kube_result", kube_result)
     deploy_module.apply_overlay(Settings(), tmp_path)
     assert len(calls) == 2
     assert "--force-conflicts" not in calls[0]
@@ -148,12 +145,58 @@ def test_a_conflict_kubectl_reports_on_stderr_is_forced(tmp_path, monkeypatch):
 
 
 def test_a_clean_apply_is_not_forced(tmp_path, monkeypatch):
+    import subprocess
+
     from harness import deploy as deploy_module
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_module, "kube", lambda settings, *args, **kwargs: calls.append(args) or "applied")
+
+    def kube_result(settings, *args, **kwargs):
+        calls.append([str(argument) for argument in args])
+        return subprocess.CompletedProcess(calls[-1], 0, "applied", "")
+
+    monkeypatch.setattr(deploy_module, "kube_result", kube_result)
     deploy_module.apply_overlay(Settings(), tmp_path)
     assert len(calls) == 1
+
+
+def test_an_apply_that_fails_without_a_conflict_stops_the_run(tmp_path, monkeypatch):
+    """A non-zero apply that is not a recoverable conflict is a failure, not a clean apply."""
+    import subprocess
+
+    from harness import deploy as deploy_module
+
+    calls: list[list[str]] = []
+
+    def kube_result(settings, *args, **kwargs):
+        calls.append([str(argument) for argument in args])
+        return subprocess.CompletedProcess(calls[-1], 1, "", "error: clusterroles is forbidden")
+
+    monkeypatch.setattr(deploy_module, "kube_result", kube_result)
+    with pytest.raises(HarnessError, match="exit status 1"):
+        deploy_module.apply_overlay(Settings(), tmp_path)
+    assert len(calls) == 1
+
+
+def test_a_forced_reapply_that_fails_for_another_reason_stops_the_run(tmp_path, monkeypatch):
+    """Forcing the conflict away recovers it only when the retry itself succeeds."""
+    import subprocess
+
+    from harness import deploy as deploy_module
+
+    calls: list[list[str]] = []
+
+    def kube_result(settings, *args, **kwargs):
+        argv = [str(argument) for argument in args]
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 1, "", 'Apply failed with 1 conflict: conflict with "x": .rules')
+        return subprocess.CompletedProcess(argv, 1, "", "error: the server does not allow access to the resource")
+
+    monkeypatch.setattr(deploy_module, "kube_result", kube_result)
+    with pytest.raises(HarnessError, match="--force-conflicts failed with exit status 1"):
+        deploy_module.apply_overlay(Settings(), tmp_path)
+    assert len(calls) == 2
 
 
 def test_the_single_layout_points_the_conversion_webhooks(monkeypatch, tmp_path):

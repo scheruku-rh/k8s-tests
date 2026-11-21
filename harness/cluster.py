@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 
 from harness import resources
@@ -31,23 +32,34 @@ def kube(
     check: bool = True,
     capture: bool = False,
     input_text: str | None = None,
-    combined: bool = False,
 ) -> str:
-    """Run kubectl pinned to the Kind context, returning its standard output.
-
-    `combined` adds standard error to what is returned, which a caller that reads the
-    output for a diagnosis needs: kubectl reports a server-side apply's field conflicts
-    on stderr and prints nothing on stdout, so stdout alone reads as a clean apply.
-    """
+    """Run kubectl pinned to the Kind context, returning its standard output."""
     result = run(
         [settings.kubectl, "--context", settings.kube_context, *args],
         check=check,
         capture=capture,
         input_text=input_text,
     )
-    if combined:
-        return "\n".join(part for part in ((result.stdout or "").strip(), (result.stderr or "").strip()) if part)
     return (result.stdout or "").strip()
+
+
+def kube_result(
+    settings: Settings,
+    *args: object,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run kubectl pinned to the Kind context and hand back the completed process.
+
+    Both streams are captured and a failure is not raised, so a caller that has to read
+    the exit status as well as the output - an apply that may be recoverable - can. A
+    server-side apply reports its field conflicts on standard error.
+    """
+    return run(
+        [settings.kubectl, "--context", settings.kube_context, *args],
+        check=False,
+        capture=True,
+        input_text=input_text,
+    )
 
 
 def clusters(settings: Settings) -> list[str]:
@@ -204,6 +216,7 @@ __all__ = [
     "delete",
     "kind_environment",
     "kube",
+    "kube_result",
     "logs",
     "node_containers",
     "start_nodes",
