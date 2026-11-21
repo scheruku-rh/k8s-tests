@@ -194,9 +194,29 @@ def rules_for_deployment(
     return rules
 
 
+def service_account_groups(namespace: str) -> frozenset[str]:
+    """The groups a ServiceAccount in `namespace` belongs to, as RBAC sees them.
+
+    Kubernetes authenticates a ServiceAccount as a user named after it and as a member of
+    `system:serviceaccounts` and `system:serviceaccounts:<namespace>`, so a binding to
+    either group grants it as surely as one that names it.
+    """
+    return frozenset({"system:serviceaccounts", f"system:serviceaccounts:{namespace}"})
+
+
 def _binds(subjects: list[client.RbacV1Subject] | None, service_account: str, namespace: str) -> bool:
-    """Whether a binding's subjects include this ServiceAccount."""
+    """Whether a binding's subjects include this ServiceAccount, directly or by group.
+
+    Matching only direct subjects would miss a grant made to the groups every
+    ServiceAccount in the namespace belongs to, and the check that reads this would then
+    report no `watch` where one is granted.
+    """
+    groups = service_account_groups(namespace)
     for subject in subjects or []:
+        if subject.kind == "Group":
+            if subject.name in groups:
+                return True
+            continue
         if subject.kind != "ServiceAccount" or subject.name != service_account:
             continue
         if (subject.namespace or namespace) == namespace:
