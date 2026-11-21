@@ -1024,14 +1024,27 @@ commit named when the run is started - builds the operator images with the runne
 Docker, creates the Kind cluster from `hack/kind/cluster.yaml`, deploys the operators
 from that checkout and runs `k8s-tests test` against them.
 
-It is manual only, **Actions** -> **Kind harness** -> **Run workflow**, and that is the
-permission gate: GitHub lets the repository's writers start a manual workflow and nobody
-else, so there is no push, pull-request or schedule path an outside account could take.
-The job also refuses to run anywhere but `trustyai-explainability/k8s-tests`, so a fork
-that copies the file gets a no-op instead of a run of its own checkout.
+The workflow is called **Tier 3: AI Safety end-to-end**. It is manual only, **Actions** ->
+**Tier 3: AI Safety end-to-end** -> **Run workflow**, and that is the permission gate:
+GitHub lets the repository's writers start a manual workflow and nobody else, so there is
+no push, pull-request or schedule path an outside account could take. The job also refuses
+to run anywhere but `trustyai-explainability/k8s-tests`, so a fork that copies the file gets
+a no-op instead of a run of its own checkout.
 
-Every run uploads the `kind-harness-report` artifact, which holds the self-contained
-`report.html` (download it and open it in a browser) and, when the run failed,
+The run page carries the results, not just a pointer to them: the workflow asks the checks
+for a JUnit report (`--pytest-args "--junitxml=reports/junit.xml"`) and appends
+`k8s-tests summary reports/junit.xml` to the job summary, which renders the same list of
+checks `report.html` holds as a markdown table - one row per check with pass, fail, error or
+skip, the totals, and the message of everything that failed or skipped. The same command
+renders a report you already have:
+
+```sh
+k8s-tests summary reports/junit.xml                  # the run's checks as markdown
+k8s-tests summary --help
+```
+
+Every run also uploads the `kind-harness-report` artifact, which holds the self-contained
+`report.html` (download it and open it in a browser), `junit.xml` and, when the run failed,
 `diagnostics.txt` with the pods, the recent events and the `TrustyAI` resource as the
 cluster had them at the end. What runs is the default section, so the adapter benchmarks
 - one submitted job each - are not part of it.

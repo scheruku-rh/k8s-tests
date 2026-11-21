@@ -35,6 +35,7 @@ def test_help_lists_every_command(runner):
         "status",
         "logs",
         "test",
+        "summary",
         "lint",
         "fmt",
         "completion",
@@ -52,7 +53,7 @@ def test_help_documents_the_settings_with_their_variables(runner):
 def test_there_is_a_command_for_every_make_target(runner):
     """Every section of the checks is a choice of `test --section`."""
     output = invoke(runner, "test", "--help").output
-    for section in ("standard", "all", "adapters", "evalhub", "generation", "lmeval"):
+    for section in ("standard", "all", "adapters", "evalhub", "generation", "isvc-free", "lmeval", "tas-payload"):
         assert section in output
 
 
