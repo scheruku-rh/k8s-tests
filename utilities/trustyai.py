@@ -343,13 +343,33 @@ def module_condition(module: dict[str, Any], condition_type: str) -> str | None:
     return condition.get("status") if condition else None
 
 
+# How much of a condition's message one line of a failure message keeps. The module's
+# `Ready` aggregates every enabled service's operand instances, so the one that is not
+# ready is named in that message and nowhere else.
+MAX_CONDITION_MESSAGE = 120
+
+
+def _oneline(text: str | None, limit: int = MAX_CONDITION_MESSAGE) -> str:
+    """A message held to one line and `limit` characters, so a summary stays a summary."""
+    collapsed = " ".join((text or "").split())
+    if not collapsed:
+        return "no message"
+    return collapsed if len(collapsed) <= limit else collapsed[: limit - 1].rstrip() + "…"
+
+
 def describe_module_conditions(module: dict[str, Any]) -> str:
-    """Readable one-line summary of every module condition."""
+    """Readable one-line summary of every module condition, and what each one says.
+
+    The message is included because the reason alone does not say which operand instance
+    made the module `Not Ready`: `Ready=False (ServicesNotReady)` names no subject, and
+    `Ready=False (ServicesNotReady: TAS: ns/name: Not all service components are ready)`
+    says exactly which one to look at.
+    """
     conditions = module_conditions(module)
     if not conditions:
         return "none"
     return ", ".join(
-        f"{condition_type}={condition.get('status')} ({condition.get('reason')})"
+        f"{condition_type}={condition.get('status')} ({condition.get('reason')}: {_oneline(condition.get('message'))})"
         for condition_type, condition in sorted(conditions.items())
     )
 
