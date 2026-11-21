@@ -254,7 +254,6 @@ def test_api_rejects_a_token_without_the_grant(
 
 @pytest.mark.service
 @release(min="3.6")
-@pytest.mark.usefixtures("modular_trustyai_architecture")
 def test_api_returns_model_metadata(trustyai_service: ServiceAddress) -> None:
     """`/info` answers with the metadata document a caller reads before uploading."""
     response = trustyai_service.call("GET", INFO_PATH)
@@ -265,7 +264,6 @@ def test_api_returns_model_metadata(trustyai_service: ServiceAddress) -> None:
 
 @pytest.mark.service
 @release(min="3.6")
-@pytest.mark.usefixtures("modular_trustyai_architecture")
 def test_upload_registers_the_observations(trustyai_service: ServiceAddress) -> None:
     """Both halves of the drift comparison can be uploaded, and are counted."""
     before = observations(trustyai_service.call("GET", INFO_PATH).json())
@@ -285,7 +283,6 @@ def test_upload_registers_the_observations(trustyai_service: ServiceAddress) -> 
 
 @pytest.mark.service
 @release(min="3.6")
-@pytest.mark.usefixtures("modular_trustyai_architecture")
 def test_drift_detects_the_shifted_distribution(trustyai_service: ServiceAddress) -> None:
     """CompareMeans separates the TRAINING reference from the shifted production rows."""
     response = trustyai_service.call("POST", DRIFT_PATH, drift_request())
@@ -298,7 +295,6 @@ def test_drift_detects_the_shifted_distribution(trustyai_service: ServiceAddress
 
 @pytest.mark.service
 @release(min="3.6")
-@pytest.mark.usefixtures("modular_trustyai_architecture")
 def test_metric_schedule_is_listed_and_can_be_deleted(trustyai_service: ServiceAddress) -> None:
     """A recurring metric request is scheduled, listed exactly once, then removed."""
     scheduled = trustyai_service.call("POST", DRIFT_SCHEDULE_PATH, drift_request())
