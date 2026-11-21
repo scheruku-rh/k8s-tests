@@ -2,8 +2,11 @@
 
 Selection has two axes: a directory names a component (tests/evalhub), a marker names a
 section within it (evalhub, benchmark, adapters, generation). `--select` takes any pytest
-selection, so a section, a directory, a node id or -k all work. The adapter checks are a
-section of their own: each submits a real benchmark that takes minutes.
+selection, so a section, a directory, a node id or -k all work. Two sections are their own
+because a full run of them is slow: the adapter checks each submit a real benchmark that
+takes minutes, and the isvc-free checks restart both operators to prove they start with no
+serving API. `tas-payload` is the other side of that one - it installs the serving API and
+runs after `isvc-free`, in the order the report keeps.
 """
 
 from __future__ import annotations
@@ -18,7 +21,16 @@ from harness import resources
 from harness.config import Settings
 from harness.shell import HarnessError, run
 
-SECTIONS = ("standard", "all", "adapters", "evalhub", "generation", "lmeval")
+SECTIONS = (
+    "standard",
+    "all",
+    "adapters",
+    "evalhub",
+    "generation",
+    "isvc-free",
+    "lmeval",
+    "tas-payload",
+)
 
 
 def section_marker(section: str, settings: Settings) -> str | None:
@@ -35,6 +47,10 @@ def section_marker(section: str, settings: Settings) -> str | None:
             return f"evalhub and not {adapters}"
         case "generation":
             return "evalhub and generation"
+        case "isvc-free":
+            return "isvc_free"
+        case "tas-payload":
+            return "tas_payload"
         case "lmeval":
             return "lmeval"
     raise HarnessError(f"unknown section {section!r}; choose one of {', '.join(SECTIONS)}")

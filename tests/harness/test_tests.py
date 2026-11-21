@@ -17,7 +17,9 @@ from harness.shell import HarnessError
         ("adapters", "adapters"),
         ("evalhub", "evalhub and not adapters"),
         ("generation", "evalhub and generation"),
+        ("isvc-free", "isvc_free"),
         ("lmeval", "lmeval"),
+        ("tas-payload", "tas_payload"),
     ],
 )
 def test_each_section_names_its_marker(section, marker):

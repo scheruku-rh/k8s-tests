@@ -1,4 +1,4 @@
-name: Kind harness
+name: "Tier 3: AI Safety end-to-end"
 
 # Builds the TrustyAI operators from a fresh checkout of
 # trustyai-explainability/trustyai-service-operator, runs them on a Kind cluster, and
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   harness:
-    name: Build the operators and run the checks
+    name: TrustyAI operators on Kind
     # A fork that copies this file gets a no-op rather than a run of its own checkout.
     if: github.repository == 'trustyai-explainability/k8s-tests'
     runs-on: ubuntu-latest
@@ -115,8 +115,11 @@ jobs:
       - name: Run the checks
         working-directory: k8s-tests
         # The default section: every check except the adapters, whose benchmarks each
-        # take minutes. It writes reports/report.html, which is self-contained.
-        run: uv run k8s-tests test
+        # take minutes. It writes reports/report.html, which is self-contained, and
+        # reports/junit.xml, which the summary below is rendered from.
+        run: |
+          mkdir -p reports
+          uv run k8s-tests test --pytest-args "--junitxml=reports/junit.xml"
 
       - name: Collect what the cluster looked like
         if: failure()
@@ -146,14 +149,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Say what the run tested and where the report is
+      - name: Say what the run tested, and list every check it ran
+        # Always: the run page is what a reviewer reads first, and a failed run is the one
+        # worth reading. The table is the same list report.html holds, rendered from the
+        # JUnit report so nothing has to be downloaded to see which checks passed.
         if: always()
+        working-directory: k8s-tests
         run: |
           sha=$(git -C "${OPERATOR_REPO}" rev-parse HEAD 2>/dev/null || echo unknown)
           {
-            echo "### Kind harness"
+            echo "### Tier 3: AI Safety end-to-end"
             echo
             echo "Tested [trustyai-service-operator at \`${sha}\`](https://github.com/trustyai-explainability/trustyai-service-operator/commit/${sha})."
+            echo
+            uv run k8s-tests summary reports/junit.xml ||
+              echo "_The summary could not be rendered; \`report.html\` in the artifact is the record._"
             echo
             echo "The self-contained report is \`report.html\` in the \`kind-harness-report\` artifact;"
             echo "download it and open it in a browser. A failed run also carries \`diagnostics.txt\`."

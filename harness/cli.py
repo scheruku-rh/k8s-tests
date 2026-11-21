@@ -18,6 +18,7 @@ from harness import cluster as cluster_ops
 from harness import deploy as deploy_ops
 from harness import images as image_ops
 from harness import resources
+from harness import summary as summary_ops
 from harness import tests as test_ops
 from harness.config import KEEP_RESOURCES_VAR, ROOT_VAR, SETTINGS, Setting, Settings, repository_root
 from harness.shell import HarnessError, info, run
@@ -269,6 +270,20 @@ def test(
             settings, section=section, marker=marker, select=select, report=report, keep_resources=keep_resources
         )
     )
+
+
+@cli.command()
+@click.argument("junit", type=click.Path(dir_okay=False, path_type=Path), default="reports/junit.xml")
+def summary(junit: Path) -> None:
+    """Print a JUnit report as a markdown table, for a run page.
+
+    JUNIT defaults to reports/junit.xml. The checks write it beside the HTML report when
+    the run asks for one (`--pytest-args "--junitxml=reports/junit.xml"`), and the workflow
+    appends this to the job summary, so a run's results are readable without downloading
+    the artifact. A report that is missing or unreadable is a sentence, not an error: the
+    step that prints it runs even when the checks never started.
+    """
+    click.echo(summary_ops.render(junit))
 
 
 def _ruff() -> str:

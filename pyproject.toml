@@ -57,6 +57,8 @@ markers = [
     "lmeval: checks for an LMEvalJob: its execution Pod and the NetworkPolicy that guards it",
     "adapters: EvalHub adapters: one real benchmark per job, run as a section of their own",
     "module: checks for the TrustyAI module operator and the TrustyAI resource it reconciles",
+    "isvc_free: checks that both operators work on a cluster with no KServe InferenceService API",
+    "tas_payload: checks that the TrustyAIService operator writes payload capture into a KServe InferenceService, with the API installed",
     "workload: checks for the TrustyAI workload (service) operator",
     "service: checks for the TrustyAIService resource, its operand and the API behind it",
     "release: the operator releases a check applies to, from --release",
