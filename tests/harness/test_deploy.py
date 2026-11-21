@@ -199,6 +199,31 @@ def test_a_forced_reapply_that_fails_for_another_reason_stops_the_run(tmp_path, 
     assert len(calls) == 2
 
 
+def test_every_applied_crd_is_waited_for(tmp_path, monkeypatch):
+    """The Prometheus CRD is a stand-in too, and its CR is applied after this step."""
+    from pathlib import Path
+
+    from harness import arch
+    from harness import deploy as deploy_module
+
+    crds = tmp_path / "tests" / "crds"
+    crds.mkdir(parents=True)
+    entries = deploy_module.EXTERNAL_CRDS + deploy_module.MODULE_CRDS
+    for filename, _ in entries:
+        (crds / filename).write_text("kind: CustomResourceDefinition\n")
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(deploy_module, "operator_repo", lambda settings: tmp_path)
+    monkeypatch.setattr(deploy_module, "kube", lambda settings, *args, **kwargs: commands.append(list(args)) or "")
+
+    deploy_module.apply_external_crds(Settings(operator_arch=arch.ARCH_MODULAR))
+
+    applied = [Path(str(arg)).name for command in commands for arg in command if str(arg).endswith(".yaml")]
+    assert sorted(applied) == sorted(filename for filename, _ in entries)
+    waited = [command[-2] for command in commands if command[0] == "wait"]
+    assert sorted(waited) == sorted(f"crd/{name}" for _, name in entries)
+
+
 def test_the_single_layout_points_the_conversion_webhooks(monkeypatch, tmp_path):
     """The webhook CA is what `utilities.stack` does on the modular layout."""
     from harness import arch

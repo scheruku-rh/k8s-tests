@@ -83,6 +83,12 @@ def ensure_namespace(settings: Settings) -> None:
 
 
 def apply_external_crds(settings: Settings) -> None:
+    """Apply the CRDs Kind lacks, and wait for every one of them to serve.
+
+    The wait has to cover the module CRDs too, not only the OpenShift stand-ins: the
+    Prometheus the module operator's reconciliation expects is applied later, and a CR
+    that reaches the API server before its CRD is Established is rejected.
+    """
     directory = operator_repo(settings) / "tests" / "crds"
     if not directory.is_dir():
         raise HarnessError(f"missing {directory} (external CRD stand-ins)")
@@ -95,7 +101,7 @@ def apply_external_crds(settings: Settings) -> None:
         if not path.is_file():
             raise HarnessError(f"missing {path}")
         kube(settings, "apply", "-f", path, capture=True)
-    for _, name in EXTERNAL_CRDS:
+    for _, name in entries:
         kube(
             settings,
             "wait",
