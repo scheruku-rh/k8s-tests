@@ -219,10 +219,21 @@ def report_target(clients: tuple[client.CoreV1Api, client.AppsV1Api], kube_conte
 # a block of its own (`adapters`) comes before the component it belongs to. The run
 # is ordered the same way, and the Scope column names the block a row starts.
 
-SCOPE_MARKERS = ("adapters", "isvc_free", "evalhub", "emulator", "lmeval", "module", "service", "workload")
+SCOPE_MARKERS = (
+    "adapters",
+    "isvc_free",
+    "tas_payload",
+    "evalhub",
+    "emulator",
+    "lmeval",
+    "module",
+    "service",
+    "workload",
+)
 SCOPE_TITLES = {
     "adapters": "EvalHub adapters",
     "isvc_free": "Serving API",
+    "tas_payload": "TAS payload",
     "evalhub": "EvalHub",
     "emulator": "LLM emulator",
     "lmeval": "LMEvalJob",

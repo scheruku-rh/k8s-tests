@@ -798,6 +798,39 @@ k8s-tests test --select '-m isvc_free'
 The checks declare `release(min="3.7")`, so a run that declares 3.6 skips them and keeps
 the CRD 3.6 needs.
 
+### What `--section tas-payload` asserts
+
+`tests/test_trustyai_serving_payload_capture.py` is the other side of the same API, and runs
+*after* the section above: it **installs** the `InferenceService` stand-in, writes a mock
+`InferenceService` beside a `TrustyAIService`, and takes the CRD back off the cluster when it
+is done. The report and the run keep that order because the two cannot both be true at once.
+
+The CRD comes from `$OPERATOR_REPO/tests/crds` - the file `deploy` applies for a run whose
+operators watch the kind - so a run needs `OPERATOR_REPO` set, and a cluster that already
+serves the kind keeps the CRD it has (only one the section installed is removed).
+
+- the mock object gets `spec.predictor.logger = {mode: all, url:
+  https://<service>.<namespace>.svc.cluster.local}`, the https sink a RawDeployment's
+  predictor sidecar presents the service certificate to;
+- the `TrustyAIService` reports `InferenceServicesPresent=True` / `InferenceServicesFound`,
+  the mirror of the `ServingCRDNotFound` above;
+- the module operator notices the API appearing without a restart and reports
+  `KServeAvailable=True` / `Available` - it re-derives the state on every pass, which is why
+  it registers no serving watch;
+- a reconcile that finds the desired logger writes nothing: the object's `resourceVersion`
+  is unchanged across two of them;
+- deleting the service takes the logger back, along with the `internal.serving.kserve.io/*`
+  annotations KServe writes beside it - the finalizer path `#1136` rewrote.
+
+```sh
+k8s-tests test --section tas-payload                   # this section only
+k8s-tests test --select '-m tas_payload'
+```
+
+The object is created before the service on purpose: the operator registers no source for
+`serving.kserve.io`, so the pass the service creation triggers is the one that finds it (a
+fresh object is picked up within `defaultRequeueDelay`, 30s).
+
 ## Pytest suite
 
 `tests/` holds the pytest checks that run against a live cluster; they are kept
@@ -814,13 +847,15 @@ operators.
 | `tests/evalhub/test_evalhub_adapters.py` | the EvalHub adapters section (opt-in, `k8s-tests test --section adapters`): each benchmark in its table - currently `ethics_cm` of `lm_evaluation_harness`, with `num_examples: 1` against the emulator or `MODEL_URL` - is accepted as the job's only benchmark, reaches `completed`, reports the benchmark, provider, numeric metrics and the `acc` its provider scores it on, turns its pass criteria into a test outcome, and - against the emulator - the emulator authenticated the model requests it made |
 | `tests/evalhub/test_evalhub_collection_generation.py` | the authorization `trustyai-service-operator#1131` added for the collection generation API: the mounted policy maps `POST /api/v1/evaluations/collections/generation` to `evaluations create` and `GET`/`DELETE .../generation/{id}` to `evaluations` `{{.FromMethod}}`, each declared once with the `X-Tenant` rewrite and ahead of the generic `/api/v1/evaluations/collections/*` entry that also maps `get` and `delete`; the removed `.../generation/models` path has no mapping; the pod template's `auth.yaml` digest describes the policy the container mounts; the tenant-user Role grants `evaluations` `get`/`create`/`delete` and no collection write; and, as an identity granted exactly those rules, all three paths answer through the proxy (not `401`/`403`), need a token, and are refused when `X-Tenant` names a namespace the identity has no grant in |
 | `tests/lmeval/test_lmeval_network_policy.py` | an `LMEvalJob`: the operator creates one NetworkPolicy, owned by the job, admitting no ingress and one allow-all egress rule, selecting the Pod on the identity labels it also stamps there; taking any of the four identity labels off the Pod is repaired (also for a completed job, where only the Pod watch is left to trigger it); editing the policy's rules is repaired while an annotation the operator does not own is kept; and deleting the policy brings a replacement with a new UID rather than reviving the old one |
+| `tests/test_trustyai_serving_payload_capture.py` | payload capture on an installed API (`k8s-tests test --section tas-payload`, 3.7 on): installs the `InferenceService` stand-in, writes a mock `InferenceService` beside a `TrustyAIService`, and asserts the predictor's logger is that service's https sink in mode `all`, the `InferenceServicesPresent=True` / `InferenceServicesFound` condition, the module reporting the API `Available` without a restart, that a pass finding the desired logger writes nothing, and that deleting the service takes the logger and the `internal.serving.kserve.io/*` annotations back. Removes the CRD again. See [What `--section tas-payload` asserts](#what---section-tas-payload-asserts) |
 | `tests/test_trustyai_serving_optional.py` | the install with no KServe API (`k8s-tests test --section isvc-free`, 3.7 on): no `inferenceservices.serving.kserve.io` on the cluster, the module reports `KServeAvailable=False` with reason `NotInstalled` and severity `Info` and never `PreConditionFailed`, `Ready=True` with the optional API reported separately from the required `DependenciesAvailable`, no `watch` on the kind granted to the module operator's ServiceAccount, both operators restart and stay healthy, and a `TrustyAIService` reports `InferenceServicesPresent=False` with reason `ServingCRDNotFound` while its operand still runs, and deleting it finishes. See [The serving API is optional](#the-serving-api-is-optional) |
 | `tests/test_trustyai_service.py` | the TrustyAI service: the CRD serves `v1` and `v1alpha1` through a conversion webhook and a resource created as one reads back as the other; the operand rolls out one replica with the `trustyai-service`, `kube-rbac-proxy` and `internal-tls-proxy` containers, runs the requested image, carries the resource's schedule and storage settings, and mounts a bound claim at the requested size; `/q/health` answers `healthy` unauthenticated; `/info` needs a token and refuses one without the grant; both halves of a drift comparison upload and are counted; CompareMeans detects the shifted distribution; and a scheduled metric is listed once and deleted |
 | `tests/evalhub/test_evalhub.py` | EvalHub: the CRD serves `v1` and `v1alpha1` through a conversion webhook; the instance the tests create reads back through both versions, reports `Ready`, runs one pod with the `evalhub` and `kube-rbac-proxy` containers and the labels the Service selects on; a namespace labelled as a tenant receives the discovery and CA ConfigMaps; and `/api/v1/health` answers `200` (and `405` to non-GET methods) |
 
 Two axes select what runs, and they compose: a **directory** names a component
 (`tests/evalhub`), a **marker** names a section within it (`evalhub`, `benchmark`,
-`adapters`, `generation`, `isvc_free`, `module`, `service`, `emulator`, `workload`).
+`adapters`, `generation`, `isvc_free`, `tas_payload`, `module`, `service`, `emulator`,
+`workload`).
 Every module in a component directory carries that component's marker as well as its
 own, so a section is both part of its component and runnable on its own.
 
@@ -831,6 +866,7 @@ k8s-tests test --section generation                         # just the collectio
 k8s-tests test --section adapters                           # just the adapter jobs (slow, own report)
 k8s-tests test --section lmeval                             # just the LMEvalJob checks
 k8s-tests test --section isvc-free                          # just the no-serving-API install
+k8s-tests test --section tas-payload                        # the payload capture on an installed API
 k8s-tests test --section all                                # everything, adapters included
 ```
 
@@ -851,7 +887,8 @@ k8s-tests test --select '-k tenant_role'                    # one check, by name
 For example: `-m module` the modular stack, `-m workload` the workload operator,
 `-m lmeval` an `LMEvalJob` and its NetworkPolicy, `-m service` the TrustyAI service,
 `-m emulator` the LLM emulator, `-m benchmark` the harness smoke job, `-m isvc_free`
-the install with no serving API. The same
+the install with no serving API, `-m tas_payload` the payload capture written on top of
+one. The same
 selections run through `k8s-tests test --pytest-args ...` when a full run with an extra
 filter is what you want; `test-select` runs only the selection.
 
