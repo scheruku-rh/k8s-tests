@@ -826,3 +826,9 @@ Every run uploads the `kind-harness-report` artifact, which holds the self-conta
 `diagnostics.txt` with the pods, the recent events and the `TrustyAI` resource as the
 cluster had them at the end. What runs is the default section, so the adapter benchmarks
 - one submitted job each - are not part of it.
+
+The input takes a branch, tag or commit of the operator repository; an unmerged pull
+request ref (`refs/pull/...`) is refused, so a run cannot be pointed at a fork's
+contribution. The `kind` and `kubectl` binaries are checked against the digests pinned in
+the workflow before they are installed, because a release version does not pin what it
+downloads.
