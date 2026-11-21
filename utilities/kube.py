@@ -209,12 +209,68 @@ def restart_deployment(
     """
     deployment = read_deployment(apps_client, name=name, namespace=namespace)
     pods = _pods_for(deployment, core_client, namespace)
+    replaced = {pod.metadata.uid for pod in pods}
     LOGGER.info("restarting %s/%s: deleting %d pod(s)", namespace, name, len(pods))
     for pod in pods:
         core_client.delete_namespaced_pod(name=pod.metadata.name, namespace=namespace)
+    wait_for_replacement_pods(
+        apps_client, core_client, name=name, namespace=namespace, replaced=replaced, timeout=timeout, interval=interval
+    )
     return wait_for_deployment_available(
         apps_client, name, namespace, timeout=timeout, interval=interval, core_client=core_client
     )
+
+
+def wait_for_replacement_pods(
+    apps_client: client.AppsV1Api,
+    core_client: client.CoreV1Api,
+    name: str,
+    namespace: str,
+    replaced: set[str],
+    timeout: int = 300,
+    interval: int = 5,
+) -> None:
+    """Wait until none of the pods that were replaced is listed and the new ones are Ready.
+
+    The Deployment's status is the controller's last observation, so straight after a delete
+    it can still say `ready_replicas == desired` while the only pod is already gone. A
+    waiter that trusts that status (and treats an absent pod list as no pod terminating)
+    returns before anything is serving, which is what a check that reads the pods next then
+    sees. Whichever pods were deleted have to be gone and their replacements Ready first.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        deployment = read_deployment(apps_client, name=name, namespace=namespace)
+        wanted = deployment.spec.replicas if deployment.spec.replicas is not None else 1
+        pods = _pods_for(deployment, core_client, namespace)
+        remaining = sorted(pod.metadata.name for pod in pods if pod.metadata.uid in replaced)
+        ready = [pod for pod in pods if _is_ready(pod)]
+        if not remaining and len(ready) >= wanted:
+            LOGGER.info("%s/%s has %d ready replacement pod(s)", namespace, name, len(ready))
+            return
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"the pods of {namespace}/{name} were not replaced within {timeout}s: "
+                f"still terminating {', '.join(remaining) or 'none'}, {len(ready)}/{wanted} ready",
+                pytrace=False,
+            )
+        LOGGER.info(
+            "%s/%s waiting for replacements: still there %s, %d/%d ready",
+            namespace,
+            name,
+            ", ".join(remaining) or "none",
+            len(ready),
+            wanted,
+        )
+        time.sleep(interval)
+
+
+def _is_ready(pod: client.V1Pod) -> bool:
+    """Whether the pod is running every container it asks for and is not being deleted."""
+    if pod.metadata.deletion_timestamp is not None:
+        return False
+    statuses = pod.status.container_statuses or []
+    return bool(statuses) and all(status.ready for status in statuses)
 
 
 def wait_for_deployment_available(
