@@ -14,6 +14,8 @@ from harness.arch import (
     operator_images,
     release_disagrees,
     require_operator_repo,
+    requires_serving_crd,
+    serving_crd_source,
     single_operator_overlay,
 )
 from harness.config import Settings
@@ -153,3 +155,49 @@ def test_an_unparsable_release_is_an_error_not_a_layout(tmp_path):
     root = checkout(tmp_path / "c", modular=True)
     with pytest.raises(HarnessError, match="not a release version"):
         release_disagrees(settings_for(root, release="3.x"))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, False),
+        ({"release": "3.5"}, True),
+        ({"release": "3.6"}, True),
+        ({"release": "3.6.1"}, True),
+        ({"release": "3.7"}, False),
+        ({"release": "3.7", "serving_crd": "always"}, True),
+        ({"release": "3.6", "serving_crd": "never"}, False),
+    ],
+)
+def test_the_release_decides_whether_the_serving_crd_is_installed(tmp_path, overrides, expected):
+    """A 3.6 or earlier operator watches the kind; a 3.7 one only asks whether it is served."""
+    root = checkout(tmp_path / "modular", modular=True)
+    assert requires_serving_crd(settings_for(root, **overrides)) is expected
+
+
+def test_the_declared_release_beats_the_layout(tmp_path):
+    modular = checkout(tmp_path / "modular", modular=True)
+    single = checkout(tmp_path / "rhoai-3.5", modular=False)
+    assert requires_serving_crd(settings_for(modular, release="3.7")) is False
+    assert requires_serving_crd(settings_for(single, release="3.6")) is True
+
+
+def test_with_no_release_declared_the_layout_decides(tmp_path):
+    """Nothing else distinguishes a 3.6 checkout from a 3.7 one, so the older layout settles it."""
+    modular = checkout(tmp_path / "modular", modular=True)
+    single = checkout(tmp_path / "rhoai-3.5", modular=False)
+    assert requires_serving_crd(settings_for(modular)) is False
+    assert requires_serving_crd(settings_for(single)) is True
+
+
+def test_the_serving_source_says_what_decided_it(tmp_path):
+    modular = checkout(tmp_path / "modular", modular=True)
+    assert serving_crd_source(settings_for(modular, serving_crd="never")) == "SERVING_CRD=never"
+    assert serving_crd_source(settings_for(modular, release="3.7")) == "--release 3.7"
+    assert "no --release declaring 3.6" in serving_crd_source(settings_for(modular))
+    assert "3.6 or earlier" in serving_crd_source(settings_for(checkout(tmp_path / "s", modular=False)))
+
+
+def test_a_release_the_crd_gate_cannot_parse_is_an_error(tmp_path):
+    with pytest.raises(HarnessError, match="--release"):
+        requires_serving_crd(settings_for(checkout(tmp_path / "modular", modular=True), release="banana"))

@@ -192,6 +192,31 @@ def _terminating_pods(deployment: client.V1Deployment, core_client: client.CoreV
     ]
 
 
+def restart_deployment(
+    apps_client: client.AppsV1Api,
+    name: str,
+    namespace: str,
+    core_client: client.CoreV1Api,
+    timeout: int = 300,
+    interval: int = 5,
+) -> client.V1Deployment:
+    """Delete the Deployment's pods and wait for the replacements to be rolled out.
+
+    The process the pods run is what a check restarts: the operator comes back with an
+    empty cache and an empty informer set, which is the only way to see whether it still
+    starts on this cluster. The Deployment itself is left alone, so `kubectl rollout
+    restart` is not needed and its annotation does not have to be undone afterwards.
+    """
+    deployment = read_deployment(apps_client, name=name, namespace=namespace)
+    pods = _pods_for(deployment, core_client, namespace)
+    LOGGER.info("restarting %s/%s: deleting %d pod(s)", namespace, name, len(pods))
+    for pod in pods:
+        core_client.delete_namespaced_pod(name=pod.metadata.name, namespace=namespace)
+    return wait_for_deployment_available(
+        apps_client, name, namespace, timeout=timeout, interval=interval, core_client=core_client
+    )
+
+
 def wait_for_deployment_available(
     apps_client: client.AppsV1Api,
     name: str,

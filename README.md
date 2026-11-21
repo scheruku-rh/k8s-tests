@@ -151,8 +151,10 @@ How the images reach the cluster:
 
 1. Creates the target namespace (`system` by default).
 2. Applies the external CRD stand-ins the operators expect, copied from
-   `$OPERATOR_REPO/tests/crds`: OpenShift `Route`, Prometheus Operator
-   `Prometheus`/`ServiceMonitor`, and KServe `InferenceService`.
+   `$OPERATOR_REPO/tests/crds`: OpenShift `Route` and Prometheus Operator
+   `Prometheus`/`ServiceMonitor`, plus KServe `InferenceService` for a run whose operators
+   still watch it (3.6 and earlier - see [The serving API is
+   optional](#the-serving-api-is-optional)).
 3. Renders `$OPERATOR_REPO/trustyai-operator-module/config/default` from a temporary
    copy, so the module operator image, the workload operator image it renders
    (`RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_OPERATOR_IMAGE`), the operand images the
@@ -262,7 +264,8 @@ Every one is a flag and an environment variable; `k8s-tests --help` lists them a
 | --- | --- | --- |
 | `OPERATOR_REPO` | *(required)* | Checkout the images and manifests come from |
 | `OPERATOR_ARCH` | *(from the checkout)* | `modular` (3.6+, module operator) or `single` (3.5 and earlier); naming a layout the checkout does not have is an error |
-| `OPERATOR_RELEASE` | *(empty)* | RHOAI/ODH release that checkout is from (`3.5`, `3.6`), as `--release`; gates the checks by release, see [Release gating](#release-gating) |
+| `OPERATOR_RELEASE` | *(empty)* | RHOAI/ODH release that checkout is from (`3.6`, `3.7`), as `--release`; gates the checks by release, see [Release gating](#release-gating), and decides whether the KServe `InferenceService` CRD is installed |
+| `SERVING_CRD` | `auto` | `auto` installs the `InferenceService` CRD only for a 3.6 or earlier run, by `OPERATOR_RELEASE` or else by a pre-module checkout; `always`/`never` override, as `--serving-crd` |
 | `KIND_CLUSTER` | `trustyai` | Kind cluster name (context `kind-<name>`) |
 | `KIND_NODE_IMAGE` | Kind's default | Pin a node image, e.g. `kindest/node:v1.29.0` |
 | `KIND_PROVIDER` | auto | Force `podman` or `docker` on hosts that have both |
@@ -379,7 +382,10 @@ release is logged at the start of a run and printed in the HTML report.
 The ranges the checks declare today: the module stack (`tests/test_trustyai_module.py`,
 the module operator's row in `tests/test_trustyai_operators.py`, and the workload
 override check) needs the operator split that landed in 3.6, and so does the
-NetworkPolicy an `LMEvalJob` runs under (`tests/lmeval/`).
+NetworkPolicy an `LMEvalJob` runs under (`tests/lmeval/`). The install with no serving
+API (`tests/test_trustyai_serving_optional.py`) needs 3.7, the first release whose module
+operator reports an absent API as an observation; a 3.6 run skips those checks and keeps
+installing the CRD.
 
 ### Notes and troubleshooting
 
@@ -716,6 +722,82 @@ rather than faked: `RouteAvailable` (`RouteNotFound`, since nothing admits the
 Route) and `InferenceServicesPresent` (no model server registers), which is why
 `Ready` stays `False` while the claim and the operand are available.
 
+## The serving API is optional
+
+TrustyAI integrates with KServe: where `serving.kserve.io/v1beta1` `InferenceService`
+objects exist, payload capture reads a predictor and points its logger at the TrustyAI
+service. That integration is optional, and since 3.7 neither operator watches the kind any
+more - the module operator asks the API server whether it is served, and the workload
+operator reads the CRD through an uncached reader when it wants the schema
+(`trustyai-service-operator#1136` and `#1137`). A cluster that never installs the CRD is a
+supported install, not a broken one.
+
+What the two operators report about it from 3.7 on:
+
+| Resource | Condition | On a cluster with no serving API |
+| --- | --- | --- |
+| `TrustyAI/default-trustyai`, reported by the module operator | `KServeAvailable` | `False` / `NotInstalled`, severity `Info`, with a message naming `InferenceService.serving.kserve.io` |
+| `TrustyAIService`, reported by the workload operator | `InferenceServicesPresent` | `False` / `ServingCRDNotFound`, with a message naming the missing CRD; `Ready` is left where it was |
+
+Neither is a precondition: `DependenciesAvailable` still carries the required Prometheus
+check and still stops reconciliation when it fails, while the serving condition only states
+a fact. Up to 3.6 the same absence came out as `KServeAvailable=False` with reason
+`PreConditionFailed`, which reads as an unmet requirement - keeping that wording out is
+what the checks in this section are for.
+
+### The CRD follows the release
+
+`k8s-tests deploy` installs the `InferenceService` stand-in from `$OPERATOR_REPO/tests/crds`
+only when the operators still watch the kind. `--release` decides when it is declared, and
+the release *train* is what counts, because a 3.6.1 patch build carries the 3.6 watch; with
+no release declared the layout decides, since a pre-module checkout is 3.5 or earlier and a
+modular one without a declared release is taken to be the code the removal ships in.
+`--serving-crd always|never` (`SERVING_CRD`) overrides both:
+
+```sh
+k8s-tests up --release 3.7            # no InferenceService CRD; the 3.7 path
+k8s-tests up --release 3.6            # CRD installed, because a 3.6 operator watches it
+k8s-tests up --serving-crd never      # a 3.6 checkout deployed without the API on purpose
+```
+
+The CRD is only needed at startup: controller-runtime lists and then watches, and an
+informer for a kind the API server does not serve never syncs, so an operator that still
+watches `InferenceService` never becomes ready on a cluster without it - which is why the
+grant and the watch were removed together. A run that does not need the CRD but finds one
+already on the cluster says so, because a CRD outlives the run that created it and the
+checks below would otherwise skip quietly.
+
+### What `--section isvc-free` asserts
+
+`tests/test_trustyai_serving_optional.py` describes that install, and needs it: the fixture
+skips the module when `inferenceservices.serving.kserve.io` is installed, so the section is
+only meaningful on a cluster that has never had it (a fresh `k8s-tests up --release 3.7`, or
+an existing one after `kubectl delete crd inferenceservices.serving.kserve.io`).
+
+- the module reports `KServeAvailable=False` / `NotInstalled` / `Info`, names the API in its
+  message, and has reconciled the current generation;
+- no condition reports `PreConditionFailed`, and `Ready=True` / `Degraded=False` all the
+  same - an optional API cannot gate a stack that does not need it;
+- `DependenciesAvailable` is still reported on its own and still `True`, so the optional API
+  has not been folded into the required one;
+- the module operator's ServiceAccount is granted no `watch` on `inferenceservices`, the
+  verb that would make an absent CRD fatal again;
+- both operators restart and stay healthy, which is the only way to see that they start with
+  an empty informer set;
+- a `TrustyAIService` reports `InferenceServicesPresent=False` / `ServingCRDNotFound` naming
+  the CRD, and its operand still rolls out - payload capture being unavailable is not a
+  degradation;
+- deleting that service finishes: the finalizer reads the serving state too, and a read that
+  failed there would leave the resource stuck on a cluster that has no such API.
+
+```sh
+k8s-tests test --section isvc-free                     # this section only
+k8s-tests test --select '-m isvc_free'
+```
+
+The checks declare `release(min="3.7")`, so a run that declares 3.6 skips them and keeps
+the CRD 3.6 needs.
+
 ## Pytest suite
 
 `tests/` holds the pytest checks that run against a live cluster; they are kept
@@ -725,19 +807,20 @@ operators.
 | Module | What it checks |
 | --- | --- |
 | `tests/test_trustyai_operators.py` | the harness smoke checks: both operator Deployments exist, ask for a single replica, and are healthy (`Available`, the desired replicas ready, their pods `Running` with every container ready) |
-| `tests/test_trustyai_module.py` | the modular stack: the module CRD is installed, both operator Deployments are available, `TrustyAI/default-trustyai` reports `Ready=True` with `ProvisioningSucceeded=True` and an up-to-date `observedGeneration`, and the module operator runs the built image |
+| `tests/test_trustyai_module.py` | the modular stack: the module CRD is installed, both operator Deployments are available, `TrustyAI/default-trustyai` reports `Ready=True` with `ProvisioningSucceeded=True` and an up-to-date `observedGeneration`, the module operator runs the built image, and - where the KServe CRD is installed - `KServeAvailable` reports `True`/`Available` (3.7 on), which is the other side of [the serving API being optional](#the-serving-api-is-optional) |
 | `tests/test_trustyai_workload.py` | the workload operator image: it matches the `RELATED_IMAGE_*` value the module operator renders it from, the image the harness built, and the operator's own ConfigMap |
 | `tests/test_emulator.py` | the LLM emulator (skipped when `MODEL_URL` is set): its Deployment runs the pinned image and is healthy, `/health` needs no token, `/v1/completions` and `/v1/chat/completions` answer `401` without the token or with another one and `200` with the token from the `vllm-emulator-auth` Secret, that Secret carries the `api-key` key `model.auth.secret_ref` resolves, and the token check reports which token fingerprint it saw |
 | `tests/evalhub/test_evalhub_benchmark.py` | a benchmark job: the API accepts a job for `arc_easy` with `num_examples: 1` against the emulator or `MODEL_URL`, it reaches `completed`, its results carry the benchmark id, provider and numeric metrics, and - against the emulator - the emulator saw the tenant Secret's token (or `MODEL_KEY`) on a `/v1` request |
 | `tests/evalhub/test_evalhub_adapters.py` | the EvalHub adapters section (opt-in, `k8s-tests test --section adapters`): each benchmark in its table - currently `ethics_cm` of `lm_evaluation_harness`, with `num_examples: 1` against the emulator or `MODEL_URL` - is accepted as the job's only benchmark, reaches `completed`, reports the benchmark, provider, numeric metrics and the `acc` its provider scores it on, turns its pass criteria into a test outcome, and - against the emulator - the emulator authenticated the model requests it made |
 | `tests/evalhub/test_evalhub_collection_generation.py` | the authorization `trustyai-service-operator#1131` added for the collection generation API: the mounted policy maps `POST /api/v1/evaluations/collections/generation` to `evaluations create` and `GET`/`DELETE .../generation/{id}` to `evaluations` `{{.FromMethod}}`, each declared once with the `X-Tenant` rewrite and ahead of the generic `/api/v1/evaluations/collections/*` entry that also maps `get` and `delete`; the removed `.../generation/models` path has no mapping; the pod template's `auth.yaml` digest describes the policy the container mounts; the tenant-user Role grants `evaluations` `get`/`create`/`delete` and no collection write; and, as an identity granted exactly those rules, all three paths answer through the proxy (not `401`/`403`), need a token, and are refused when `X-Tenant` names a namespace the identity has no grant in |
 | `tests/lmeval/test_lmeval_network_policy.py` | an `LMEvalJob`: the operator creates one NetworkPolicy, owned by the job, admitting no ingress and one allow-all egress rule, selecting the Pod on the identity labels it also stamps there; taking any of the four identity labels off the Pod is repaired (also for a completed job, where only the Pod watch is left to trigger it); editing the policy's rules is repaired while an annotation the operator does not own is kept; and deleting the policy brings a replacement with a new UID rather than reviving the old one |
+| `tests/test_trustyai_serving_optional.py` | the install with no KServe API (`k8s-tests test --section isvc-free`, 3.7 on): no `inferenceservices.serving.kserve.io` on the cluster, the module reports `KServeAvailable=False` with reason `NotInstalled` and severity `Info` and never `PreConditionFailed`, `Ready=True` with the optional API reported separately from the required `DependenciesAvailable`, no `watch` on the kind granted to the module operator's ServiceAccount, both operators restart and stay healthy, and a `TrustyAIService` reports `InferenceServicesPresent=False` with reason `ServingCRDNotFound` while its operand still runs, and deleting it finishes. See [The serving API is optional](#the-serving-api-is-optional) |
 | `tests/test_trustyai_service.py` | the TrustyAI service: the CRD serves `v1` and `v1alpha1` through a conversion webhook and a resource created as one reads back as the other; the operand rolls out one replica with the `trustyai-service`, `kube-rbac-proxy` and `internal-tls-proxy` containers, runs the requested image, carries the resource's schedule and storage settings, and mounts a bound claim at the requested size; `/q/health` answers `healthy` unauthenticated; `/info` needs a token and refuses one without the grant; both halves of a drift comparison upload and are counted; CompareMeans detects the shifted distribution; and a scheduled metric is listed once and deleted |
 | `tests/evalhub/test_evalhub.py` | EvalHub: the CRD serves `v1` and `v1alpha1` through a conversion webhook; the instance the tests create reads back through both versions, reports `Ready`, runs one pod with the `evalhub` and `kube-rbac-proxy` containers and the labels the Service selects on; a namespace labelled as a tenant receives the discovery and CA ConfigMaps; and `/api/v1/health` answers `200` (and `405` to non-GET methods) |
 
 Two axes select what runs, and they compose: a **directory** names a component
 (`tests/evalhub`), a **marker** names a section within it (`evalhub`, `benchmark`,
-`adapters`, `generation`, `module`, `service`, `emulator`, `workload`).
+`adapters`, `generation`, `isvc_free`, `module`, `service`, `emulator`, `workload`).
 Every module in a component directory carries that component's marker as well as its
 own, so a section is both part of its component and runnable on its own.
 
@@ -747,6 +830,7 @@ k8s-tests test --section evalhub                            # all EvalHub checks
 k8s-tests test --section generation                         # just the collection generation authorization
 k8s-tests test --section adapters                           # just the adapter jobs (slow, own report)
 k8s-tests test --section lmeval                             # just the LMEvalJob checks
+k8s-tests test --section isvc-free                          # just the no-serving-API install
 k8s-tests test --section all                                # everything, adapters included
 ```
 
@@ -766,7 +850,8 @@ k8s-tests test --select '-k tenant_role'                    # one check, by name
 
 For example: `-m module` the modular stack, `-m workload` the workload operator,
 `-m lmeval` an `LMEvalJob` and its NetworkPolicy, `-m service` the TrustyAI service,
-`-m emulator` the LLM emulator, `-m benchmark` the harness smoke job. The same
+`-m emulator` the LLM emulator, `-m benchmark` the harness smoke job, `-m isvc_free`
+the install with no serving API. The same
 selections run through `k8s-tests test --pytest-args ...` when a full run with an extra
 filter is what you want; `test-select` runs only the selection.
 

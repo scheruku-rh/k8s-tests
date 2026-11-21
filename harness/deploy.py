@@ -31,13 +31,17 @@ from harness.images import operator_repo
 from harness.shell import HarnessError, info, warn
 from utilities.certs import generate_serving_cert, service_dns_names
 
-# Kind has no OpenShift Routes, Prometheus Operator or KServe, but the rendered
-# manifests reference their types and the watchers need them to exist.
+# Kind has no OpenShift Routes or Prometheus Operator, but the rendered manifests
+# reference their types and the watchers need them to exist.
 EXTERNAL_CRDS = (
     ("route_crd.yaml", "routes.route.openshift.io"),
     ("monitoring.coreos.com_servicemonitors.yaml", "servicemonitors.monitoring.coreos.com"),
-    ("serving.kserve.io_inferenceservices.yaml", "inferenceservices.serving.kserve.io"),
 )
+
+# The KServe API. A 3.6 or earlier operator watches the kind, so the CRD has to be there
+# before it starts; from 3.7 on nothing does, and a run that installs it anyway is not
+# testing the install this harness is for. See `arch.SERVING_CRD_MAX_VERSION`.
+SERVING_CRD = ("serving.kserve.io_inferenceservices.yaml", "inferenceservices.serving.kserve.io")
 
 # Only the module operator seeds a Prometheus instance, and only a modular checkout ships
 # the stand-in: a pre-module one has no prometheus API to satisfy.
@@ -82,19 +86,57 @@ def ensure_namespace(settings: Settings) -> None:
     kube(settings, "apply", "-f", "-", input_text=manifest)
 
 
+def crd_entries(settings: Settings) -> list[tuple[str, str]]:
+    """The CRD stand-ins this run applies, as (file, name) pairs in the order they are applied."""
+    entries = list(EXTERNAL_CRDS)
+    if arch.deploys_module_operator(settings):
+        entries += list(MODULE_CRDS)
+    if arch.requires_serving_crd(settings):
+        entries.append(SERVING_CRD)
+    return entries
+
+
+def report_serving_crd(settings: Settings) -> None:
+    """Say whether the serving API is installed, and warn when a run that needs nothing finds one.
+
+    A cluster keeps a CRD across runs and this harness never deletes one, so a run that
+    does not need serving can inherit it from an earlier 3.6 run. That run is not
+    exercising the removal, and the checks that do skip, so it says so instead of passing
+    quietly.
+    """
+    reason = arch.serving_crd_source(settings)
+    if arch.requires_serving_crd(settings):
+        info(f"installing the InferenceService CRD: the operators watch it ({reason})")
+        return
+    info(f"not installing the InferenceService CRD: nothing reads it ({reason})")
+    if arch.deploys_module_operator(settings) and not settings.release:
+        info(
+            "nothing declared this run as 3.6; a 3.6 checkout needs the CRD, so name it "
+            "(--release 3.6) or pass --serving-crd always"
+        )
+    if kube(settings, "get", "crd", SERVING_CRD[1], check=False, capture=True):
+        warn(
+            f"crd/{SERVING_CRD[1]} is already installed and this run leaves it alone; "
+            "a cluster without it is what the isvc-free checks want"
+        )
+
+
 def apply_external_crds(settings: Settings) -> None:
     """Apply the CRDs Kind lacks, and wait for every one of them to serve.
 
     The wait has to cover the module CRDs too, not only the OpenShift stand-ins: the
     Prometheus the module operator's reconciliation expects is applied later, and a CR
     that reaches the API server before its CRD is Established is rejected.
+
+    The InferenceService CRD is the one entry that follows the release rather than the API
+    server: it is applied only for a run whose operators still watch the kind, which is
+    what `crd_entries` and `report_serving_crd` decide.
     """
     directory = operator_repo(settings) / "tests" / "crds"
     if not directory.is_dir():
         raise HarnessError(f"missing {directory} (external CRD stand-ins)")
-    entries = list(EXTERNAL_CRDS)
-    if arch.deploys_module_operator(settings):
-        entries += list(MODULE_CRDS)
+    report_serving_crd(settings)
+    entries = crd_entries(settings)
     info(f"applying external CRDs from {directory}")
     for filename, _ in entries:
         path = directory / filename
@@ -471,6 +513,7 @@ __all__ = [
     "MODULE_CRDS",
     "MODULE_OPERATOR_DEPLOYMENT",
     "OPERATOR_CONFIG_MAP",
+    "SERVING_CRD",
     "WORKLOAD_OPERATOR_DEPLOYMENT",
     "RELATED_IMAGES",
     "TLS_SECRETS",
@@ -478,6 +521,7 @@ __all__ = [
     "apply_overlay",
     "announce_operands",
     "bring_up",
+    "crd_entries",
     "deploy",
     "deploy_modular",
     "deploy_single",
@@ -488,6 +532,7 @@ __all__ = [
     "registry_up",
     "operand_images",
     "point_conversion_webhooks",
+    "report_serving_crd",
     "warn_on_moving_pins",
     "related_image_env",
     "render_module_operator",

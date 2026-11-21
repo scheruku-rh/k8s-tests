@@ -27,6 +27,13 @@ from kubernetes.dynamic import DynamicClient
 from utilities.kube import assert_deployment_healthy, read_deployment
 from utilities.kube import container_images as deployment_images
 from utilities.release import release
+from utilities.serving import (
+    MODULE_CONDITION,
+    REASON_AVAILABLE,
+    SERVING_CRD_NAME,
+    describe,
+    serving_api_installed,
+)
 from utilities.trustyai import (
     MODULE_CRD_NAME,
     MODULE_IMAGE_VAR,
@@ -38,6 +45,7 @@ from utilities.trustyai import (
     crd_exists,
     expected_image_from_env,
     module_api_version,
+    module_conditions,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -86,6 +94,32 @@ def test_trustyai_module_cr_ready(dynamic_client: DynamicClient, api_client: cli
 
     assert_module_provisioning_succeeded(module)
     assert_module_observed_generation(module)
+
+
+@release(min="3.7")
+def test_module_reports_an_installed_serving_api(dynamic_client: DynamicClient, api_client: client.ApiClient) -> None:
+    """The other side of the optional API: where KServe is installed, the same condition says so.
+
+    The absence is what `--section isvc-free` covers; this is the state a platform that
+    does install serving reports, and it is skipped on the clusters that section runs on.
+    """
+    if not serving_api_installed(api_client):
+        pytest.skip(f"{SERVING_CRD_NAME} is not installed; the serving integration is inactive on this cluster")
+
+    module = assert_module_ready(dynamic_client=dynamic_client, api_version=module_api_version(api_client))
+    reported = module_conditions(module).get(MODULE_CONDITION)
+    LOGGER.info("%s reports %s: %s", MODULE_CRD_NAME, MODULE_CONDITION, describe(reported))
+
+    assert reported is not None, (
+        f"{MODULE_CRD_NAME} reports no {MODULE_CONDITION} condition with {SERVING_CRD_NAME} installed; "
+        f"conditions: {', '.join(sorted(module_conditions(module)))}"
+    )
+    assert reported.get("status") == "True", (
+        f"{MODULE_CONDITION} is {reported.get('status')} with {SERVING_CRD_NAME} installed: {describe(reported)}"
+    )
+    assert reported.get("reason") == REASON_AVAILABLE, (
+        f"{MODULE_CONDITION} reason is {reported.get('reason')!r}, expected {REASON_AVAILABLE!r}: {describe(reported)}"
+    )
 
 
 def test_module_operator_runs_the_built_image(apps_client: client.AppsV1Api, namespace: str) -> None:

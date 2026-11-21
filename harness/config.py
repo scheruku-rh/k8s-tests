@@ -107,6 +107,19 @@ SETTINGS: tuple[Setting, ...] = (
         ),
     ),
     Setting(
+        field="serving_crd",
+        envvar="SERVING_CRD",
+        flag="--serving-crd",
+        default="auto",
+        kind="choice",
+        choices=("auto", "always", "never"),
+        help=(
+            "the KServe InferenceService CRD the operators are stood in for: auto installs it only when the run "
+            "is 3.6 or older, by --release or else by the checkout's pre-module layout; always and never override, "
+            "and never is how a run proves the stack works with no serving API at all"
+        ),
+    ),
+    Setting(
         field="namespace",
         envvar="NAMESPACE",
         default="system",
@@ -327,6 +340,7 @@ class Settings:
     operator_repo: str = ""
     operator_arch: str = ""
     release: str = ""
+    serving_crd: str = "auto"
     namespace: str = "system"
     kube_context: str = ""
     kubectl: str = "kubectl"

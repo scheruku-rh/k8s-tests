@@ -208,7 +208,7 @@ def test_every_applied_crd_is_waited_for(tmp_path, monkeypatch):
 
     crds = tmp_path / "tests" / "crds"
     crds.mkdir(parents=True)
-    entries = deploy_module.EXTERNAL_CRDS + deploy_module.MODULE_CRDS
+    entries = deploy_module.crd_entries(Settings(operator_arch=arch.ARCH_MODULAR))
     for filename, _ in entries:
         (crds / filename).write_text("kind: CustomResourceDefinition\n")
 
@@ -276,3 +276,57 @@ def test_a_pre_module_run_says_what_the_operator_pins_are():
         lmes_img="quay.io/opendatahub/ta-lmes-job:odh-3.5-ga",
     )
     assert deploy.warn_on_moving_pins(both) == ""
+
+
+def _applied_crds(tmp_path, monkeypatch, **settings):
+    """The CRD files `apply_external_crds` applies, for a run with these settings."""
+    from pathlib import Path
+
+    from harness import deploy as deploy_module
+
+    crds = tmp_path / "tests" / "crds"
+    crds.mkdir(parents=True)
+    for filename, _ in (*deploy_module.EXTERNAL_CRDS, *deploy_module.MODULE_CRDS, deploy_module.SERVING_CRD):
+        (crds / filename).write_text("kind: CustomResourceDefinition\n")
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(deploy_module, "operator_repo", lambda setup: tmp_path)
+    monkeypatch.setattr(deploy_module, "kube", lambda setup, *args, **kwargs: commands.append(list(args)) or "")
+
+    deploy_module.apply_external_crds(Settings(**settings))
+    return [Path(str(arg)).name for command in commands for arg in command if str(arg).endswith(".yaml")]
+
+
+def test_a_3_7_run_does_not_install_the_serving_crd(tmp_path, monkeypatch):
+    """Nothing watches the kind from 3.7 on, so the CRD is not one of the stand-ins."""
+    applied = _applied_crds(tmp_path, monkeypatch, operator_arch="modular", release="3.7")
+    assert "serving.kserve.io_inferenceservices.yaml" not in applied
+    assert "route_crd.yaml" in applied
+
+
+def test_a_3_6_run_installs_the_serving_crd(tmp_path, monkeypatch):
+    """A 3.6 operator starts an informer for the kind, which never syncs without the CRD."""
+    applied = _applied_crds(tmp_path, monkeypatch, operator_arch="modular", release="3.6")
+    assert "serving.kserve.io_inferenceservices.yaml" in applied
+
+
+def test_a_leftover_serving_crd_is_reported(tmp_path, monkeypatch):
+    """A cluster keeps a CRD across runs, and a run that does not need it should say so."""
+    from harness import deploy as deploy_module
+
+    crds = tmp_path / "tests" / "crds"
+    crds.mkdir(parents=True)
+    for filename, _ in (*deploy_module.EXTERNAL_CRDS, *deploy_module.MODULE_CRDS):
+        (crds / filename).write_text("kind: CustomResourceDefinition\n")
+
+    warnings: list[str] = []
+    monkeypatch.setattr(deploy_module, "operator_repo", lambda settings: tmp_path)
+    monkeypatch.setattr(deploy_module, "info", lambda message: None)
+    monkeypatch.setattr(deploy_module, "warn", warnings.append)
+    # The `get` succeeds on the first call, so the CRD is treated as already installed.
+    monkeypatch.setattr(
+        deploy_module, "kube", lambda settings, *args, **kwargs: "serving.kserve.io_inferenceservices.yaml"
+    )
+
+    deploy_module.apply_external_crds(Settings(operator_arch="modular", release="3.7"))
+    assert warnings and "already installed" in warnings[0]

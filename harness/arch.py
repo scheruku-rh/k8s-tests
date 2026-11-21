@@ -32,6 +32,14 @@ SINGLE_OVERLAYS = ("config/overlays/rhoai", "config/overlays/odh", "config/defau
 # The first release whose operator split the module operator out.
 MODULE_OPERATOR_MIN_VERSION = "3.6"
 
+# The last release whose operators still watch the KServe InferenceService kind. A 3.6 or
+# earlier module operator grants `watch` on it and the workload operator starts a cache
+# informer for it, and an informer for a kind the API server does not serve never syncs,
+# so neither operator becomes ready. From 3.7 on both only ask the API server whether the
+# kind is served and report an absent one as an ordinary state, which needs no CRD
+# (trustyai-service-operator#1136, #1137).
+SERVING_CRD_MAX_VERSION = "3.6"
+
 
 def operator_repo(settings: Settings) -> Path:
     """The checkout, as a path; nothing about it is checked here."""
@@ -81,6 +89,45 @@ def single_operator_overlay(settings: Settings) -> Path:
         f"{settings.operator_repo} has no {', '.join(SINGLE_OVERLAYS)} to render the operator from "
         f"({arch_source(settings)})"
     )
+
+
+def requires_serving_crd(settings: Settings) -> bool:
+    """Whether this run has to install the InferenceService CRD for the operators to start.
+
+    `--release` decides when it is declared, because it is the release under test. When it
+    is not, the layout is the only signal a checkout gives: a pre-module one is 3.5 or
+    earlier and watched serving, and a modular one without a declared release is taken to
+    be the 3.7 code the removal ships in. `--serving-crd always|never` overrides both, so a
+    3.6 checkout can be deployed without naming its release and a 3.7 checkout can still be
+    given the API on purpose.
+    """
+    if settings.serving_crd == "always":
+        return True
+    if settings.serving_crd == "never":
+        return False
+    if not settings.release:
+        return not deploys_module_operator(settings)
+    from utilities.release import parse
+
+    # Compared on the release train and not the full version: 3.6.1 is a patch of the
+    # release whose operator watches the kind, so it needs the CRD the same way 3.6 does.
+    try:
+        train = (parse(settings.release) + (0, 0))[:2]
+        limit = (parse(SERVING_CRD_MAX_VERSION) + (0, 0))[:2]
+    except ValueError as exc:
+        raise HarnessError(f"--release: {exc}") from exc
+    return train <= limit
+
+
+def serving_crd_source(settings: Settings) -> str:
+    """Why that decision, in a line for the output."""
+    if settings.serving_crd != "auto":
+        return f"SERVING_CRD={settings.serving_crd}"
+    if settings.release:
+        return f"--release {settings.release}"
+    if deploys_module_operator(settings):
+        return f"the modular layout, with no --release declaring {SERVING_CRD_MAX_VERSION}"
+    return f"the pre-module layout, which is {SERVING_CRD_MAX_VERSION} or earlier"
 
 
 def release_disagrees(settings: Settings) -> str:
@@ -151,6 +198,7 @@ __all__ = [
     "ARCH_SINGLE",
     "MODULE_DIR",
     "MODULE_OPERATOR_MIN_VERSION",
+    "SERVING_CRD_MAX_VERSION",
     "SINGLE_OVERLAYS",
     "arch_source",
     "deploys_module_operator",
@@ -161,5 +209,7 @@ __all__ = [
     "release_disagrees",
     "require_layout",
     "require_operator_repo",
+    "requires_serving_crd",
+    "serving_crd_source",
     "single_operator_overlay",
 ]
