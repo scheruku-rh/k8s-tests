@@ -107,7 +107,24 @@ def test_a_registry_checkout_that_is_missing_is_an_error():
 
 def test_skip_build_with_remove_after_push_is_refused(monkeypatch):
     monkeypatch.setattr(images, "require_cluster", lambda settings: None)
-    monkeypatch.setattr(images, "operator_repo", lambda settings: None)
+    monkeypatch.setattr(images, "require_operator_repo", lambda settings: None)
     settings = Settings(skip_build=True, remove_after_push=True)
     with pytest.raises(HarnessError, match="cannot be combined"):
         images.images_all(settings)
+
+
+def test_the_preflight_validates_the_checkout_and_its_layout(tmp_path):
+    """`check-operator-repo`, and the `up` that calls it, report the layout of a real checkout."""
+    repo = operator_checkout(tmp_path)
+    with pytest.raises(HarnessError, match="OPERATOR_REPO must point at"):
+        images.check_operator_repo(Settings())
+    with pytest.raises(HarnessError, match="the single layout is for a pre-module checkout"):
+        images.check_operator_repo(Settings(operator_repo=str(repo), operator_arch="single"))
+
+
+def test_images_all_validates_the_checkout_before_it_starts_anything(monkeypatch):
+    """`images-all` stops on a missing checkout instead of starting the registry first."""
+    monkeypatch.setattr(images, "require_cluster", lambda settings: None)
+    monkeypatch.setattr(images.registry, "ensure", lambda settings: pytest.fail("the registry was started"))
+    with pytest.raises(HarnessError, match="OPERATOR_REPO must point at"):
+        images.images_all(Settings(skip_build=True))

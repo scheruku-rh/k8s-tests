@@ -36,7 +36,8 @@ def check_operator_repo(settings: Settings) -> None:
     """Report the checkout this run builds and deploys from, and the layout it has."""
     from harness.arch import arch_source, operator_arch
 
-    info(f"{operator_repo(settings)} is a trustyai-service-operator checkout")
+    repo = require_operator_repo(settings)
+    info(f"{repo} is a trustyai-service-operator checkout")
     info(f"layout: {operator_arch(settings)} ({arch_source(settings)})")
 
 
@@ -199,7 +200,7 @@ def push_and_maybe_remove(settings: Settings, image: str) -> None:
 def images_all(settings: Settings) -> None:
     """Build every source image, push it to the local registry, and record the references."""
     require_cluster(settings)
-    operator_repo(settings)
+    require_operator_repo(settings)
     if settings.skip_build and settings.remove_after_push:
         raise HarnessError(
             "SKIP_BUILD reuses the images in the local store, so it cannot be combined with REMOVE_AFTER_PUSH"
