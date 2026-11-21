@@ -21,6 +21,7 @@ point of the checks here, so it is named as the value that must not appear.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import Iterable
@@ -233,7 +234,10 @@ def install_serving_api(api_client: client.ApiClient, operator_repo: str, timeou
     """Apply the checkout's InferenceService stand-in and wait for it to be Established.
 
     Returns whether this call created it: a cluster that already serves the kind keeps the
-    CRD it has, and the caller must not delete one it did not install.
+    CRD it has, and the caller must not delete one it did not install. A CRD this call did
+    create is taken back out again if it never becomes Established - the caller only gets
+    ownership after the wait, so it could never clean up the failure itself, and the left
+    behind CRD would make every later run skip the checks that need the API absent.
     """
     path = Path(operator_repo).expanduser() / Path(*CRD_STAND_IN)
     if not path.is_file():
@@ -250,7 +254,18 @@ def install_serving_api(api_client: client.ApiClient, operator_repo: str, timeou
         LOGGER.info("%s is already installed; leaving the API it serves in place", SERVING_CRD_NAME)
         return False
     LOGGER.info("installed %s from %s", SERVING_CRD_NAME, path)
-    _wait_for_established(crds, timeout)
+    established = False
+    try:
+        _wait_for_established(crds, timeout)
+        established = True
+    finally:
+        # `finally` rather than `except`: the wait fails through `pytest.fail`, an interrupt
+        # ends the run the same way, and neither the caller's `finally` nor a retry can
+        # remove a CRD whose ownership was never handed over.
+        if not established:
+            LOGGER.warning("%s did not become Established; removing the CRD this call created", SERVING_CRD_NAME)
+            with contextlib.suppress(ApiException):
+                crds.delete_custom_resource_definition(name=SERVING_CRD_NAME)
     return True
 
 
