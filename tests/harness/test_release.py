@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.config import Settings
+from harness.config import KEEP_RESOURCES_VAR, SETTINGS, Settings
 from utilities import release as release_module
 from utilities.release import applies, compare, declared_release, describe, parse
 
@@ -116,7 +116,13 @@ def test_the_marker_is_registered():
 def test_the_harness_takes_the_release_and_exports_it(monkeypatch):
     settings = Settings.from_params({"release": "3.6"})
     assert settings.release == "3.6"
-    monkeypatch.delenv("OPERATOR_RELEASE", raising=False)
+    # `export` writes every setting into the environment, not only the release, so each
+    # name is registered first. `setenv` is what records a name that was not set
+    # (`delenv(raising=False)` records nothing for one), so teardown puts every original
+    # back - the value, or the absence.
+    for setting in SETTINGS:
+        monkeypatch.setenv(setting.envvar, "")
+    monkeypatch.setenv(KEEP_RESOURCES_VAR, "")
     settings.export()
     import os
 
