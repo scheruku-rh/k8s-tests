@@ -94,6 +94,10 @@ def render(path: Path) -> str:
         return f"_No JUnit report at `{path}`, so the checks did not run or did not finish._"
     try:
         root = ElementTree.parse(path).getroot()
+    except OSError as exc:
+        # `is_file()` only says the path names a file: the process can still be refused
+        # the read, and the step that prints this runs on runs that went wrong already.
+        return f"_`{path}` could not be read: {exc}._"
     except ElementTree.ParseError as exc:
         return f"_`{path}` is not readable as JUnit XML: {exc}._"
 

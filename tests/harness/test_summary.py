@@ -124,3 +124,17 @@ def test_the_command_prints_the_summary(report):
     result = CliRunner().invoke(cli.cli, ["summary", str(report)], obj=None, catch_exceptions=False)
     assert result.exit_code == 0
     assert "| Check | Result | Time |" in result.output
+
+
+def test_a_report_that_cannot_be_read_is_a_sentence(tmp_path: Path, monkeypatch):
+    """A path can name a file the process may not read, which `is_file()` cannot tell."""
+    path = tmp_path / "junit.xml"
+    path.write_text("<testsuites/>")
+
+    def denied(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(summary.ElementTree, "parse", denied)
+    rendered = summary.render(path)
+    assert "could not be read" in rendered
+    assert "Permission denied" in rendered
