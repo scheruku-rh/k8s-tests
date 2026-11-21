@@ -142,7 +142,11 @@ def test_the_single_layout_prefers_the_rhoai_overlay_and_falls_back(tmp_path):
 )
 def test_a_release_that_contradicts_the_layout_is_reported(tmp_path, modular, release, expected):
     root = checkout(tmp_path / "c", modular=modular)
-    assert expected in release_disagrees(settings_for(root, release=release))
+    disagreeing = release_disagrees(settings_for(root, release=release))
+    if expected:
+        assert expected in disagreeing
+    else:
+        assert disagreeing == "", f"nothing to report, got {disagreeing!r}"
 
 
 def test_an_unparsable_release_is_an_error_not_a_layout(tmp_path):
