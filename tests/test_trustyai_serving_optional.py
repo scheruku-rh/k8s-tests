@@ -84,6 +84,15 @@ MIN_RELEASE = "3.7"
 FINALIZER_TIMEOUT = 180
 FINALIZER_INTERVAL = 3
 
+# The two conditions every check here reads. `trustyai_module` waits for the workload
+# operator, not for the module operator to have written its status, so the first read can
+# be a reconcile early; the module operator requeues every 60s, so this is well past one.
+CONDITIONS_TIMEOUT = 180
+CONDITIONS_INTERVAL = 5
+
+# What the module operator reports the required and the optional dependency under.
+DEPENDENCIES_CONDITION = "DependenciesAvailable"
+
 pytestmark = [
     pytest.mark.isvc_free,
     release(min=MIN_RELEASE),
@@ -103,8 +112,34 @@ def serving_absent(api_client: client.ApiClient) -> None:
 
 @pytest.fixture(scope="module")
 def module(dynamic_client: DynamicClient, api_client: client.ApiClient) -> dict:
-    """The module resource, read once: it is the same object every check here reports on."""
-    return read_module(dynamic_client, module_api_version(api_client))
+    """The module resource, read once both conditions this module reads are on it.
+
+    It is read once because it is the same object every check here reports on, and it is
+    read *after* the conditions appear because nothing before this point waits for the
+    module operator to have written its status: `trustyai_module` waits for the workload
+    operator it deploys. A snapshot taken a reconcile early has no conditions to assert on.
+    """
+    api_version = module_api_version(api_client)
+    deadline = time.monotonic() + CONDITIONS_TIMEOUT
+    while True:
+        observed = read_module(dynamic_client, api_version)
+        conditions = module_conditions(observed)
+        if MODULE_CONDITION in conditions and DEPENDENCIES_CONDITION in conditions:
+            LOGGER.info("%s/%s reports %s", MODULE_KIND, MODULE_CR_NAME, sorted(conditions))
+            return observed
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"{MODULE_KIND}/{MODULE_CR_NAME} did not report {MODULE_CONDITION} and {DEPENDENCIES_CONDITION} "
+                f"within {CONDITIONS_TIMEOUT}s; conditions: {', '.join(sorted(conditions)) or 'none'}",
+                pytrace=False,
+            )
+        LOGGER.info(
+            "waiting for %s/%s to report its conditions; it has %s",
+            MODULE_KIND,
+            MODULE_CR_NAME,
+            ", ".join(sorted(conditions)) or "none",
+        )
+        time.sleep(CONDITIONS_INTERVAL)
 
 
 @pytest.fixture(scope="module")
@@ -184,13 +219,13 @@ def test_the_required_dependency_is_reported_separately(module: dict) -> None:
     conditions = module_conditions(module)
     LOGGER.info("%s/%s conditions: %s", MODULE_KIND, MODULE_CR_NAME, sorted(conditions))
 
-    assert "DependenciesAvailable" in conditions, (
-        f"{MODULE_KIND}/{MODULE_CR_NAME} reports no DependenciesAvailable condition; "
+    assert DEPENDENCIES_CONDITION in conditions, (
+        f"{MODULE_KIND}/{MODULE_CR_NAME} reports no {DEPENDENCIES_CONDITION} condition; "
         f"conditions: {', '.join(sorted(conditions))}"
     )
-    assert conditions["DependenciesAvailable"].get("status") == "True", (
-        "the required dependency is not satisfied with the harness' Prometheus stand-in: "
-        f"{describe(conditions['DependenciesAvailable'])}"
+    assert conditions[DEPENDENCIES_CONDITION].get("status") == "True", (
+        f"the required dependency is not satisfied with the harness' Prometheus stand-in: "
+        f"{describe(conditions[DEPENDENCIES_CONDITION])}"
     )
     assert conditions[MODULE_CONDITION].get("status") == "False", (
         f"the optional {MODULE_CONDITION} is reported as the required dependency: "
