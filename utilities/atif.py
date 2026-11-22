@@ -174,6 +174,10 @@ def trajectory(
         ],
         "extra": {"task_instruction": task, "producer_sha256": f"sha256-of-{trajectory_id}"},
     }
+    if schema_version == V16:
+        # The root session id became optional in ATIF-v1.7; v1.6 requires it, so a
+        # document without one is not a valid v1.6 input for the range check to score.
+        document["session_id"] = f"run-{trajectory_id}"
     if undeclared_field:
         document[undeclared_field] = "declared nowhere"
     return document
