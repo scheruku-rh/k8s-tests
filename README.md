@@ -681,9 +681,9 @@ seven jobs. It is slow - each job pulls the adapter image, runs judge calls and 
 to MLflow - and it is opt-in only:
 
 ```sh
-k8s-tests images && k8s-tests deploy-registry   # build and deploy the ATIF image, records ATIF_IMG
-k8s-tests test --section adapters-atif                  # only this section, into reports/adapters-atif.html
-k8s-tests test --select '-m atif' --keep-resources   # leave the jobs and their pods behind
+k8s-tests --adapters atif images-all && k8s-tests deploy-registry   # build and push this adapter, recording ATIF_IMG
+k8s-tests test --section adapters-atif                              # only this section, into reports/adapters-atif.html
+k8s-tests test --select '-m atif' --keep-resources                  # leave the jobs and their pods behind
 ```
 
 ## Collection generation authorization
