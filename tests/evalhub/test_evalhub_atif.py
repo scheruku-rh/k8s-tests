@@ -29,6 +29,7 @@ exercise the checkout rather than the operator's pin.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -70,9 +71,9 @@ PROVIDER_LABEL = "trustyai.opendatahub.io/evalhub-provider-name"
 PROVIDER_CONFIG_KEY = "atif.yaml"
 
 
-def _detailed(result: dict[str, Any]) -> dict[str, Any]:
-    """The result's evaluation metadata, where the adapter's counts live."""
-    return result.get("evaluation_metadata") or {}
+def _report(report: str) -> dict[str, Any]:
+    """The parsed `atif/evaluation_results.json` the adapter persisted."""
+    return json.loads(report)
 
 
 def _metrics(result: dict[str, Any]) -> dict[str, float]:
@@ -511,6 +512,58 @@ def test_skipping_a_failed_digest_withholds_only_its_score(skip_failed_run: dict
     report = result.get("trajectory_results") or []
     assert report == [] or all(item.get("status") != "scored" for item in report), (
         f"a mismatched digest was scored: {report}"
+    )
+
+
+@pytest.fixture(scope="module")
+def mixed_digest_run(
+    tenant_ready: None,
+    core_client: client.CoreV1Api,
+    batch_client: client.BatchV1Api,
+    evalhub_instance_namespace: str,
+    evalhub_api_base: str,
+    evalhub_tenant_token: str,
+    evalhub_tenant_namespace: str,
+    judge: str,
+    evalhub_mlflow: str,
+) -> dict[str, Any]:
+    """One verifiable entry and one whose declared digest is wrong."""
+    export = _publish(
+        core_client,
+        batch_client,
+        evalhub_tenant_namespace,
+        "atif-digest-mixed",
+        export_files(entries=2, digest_mismatch=1, unlisted=False),
+    )
+    return _run(
+        name="atif-digest-mixed",
+        export=export,
+        judge_url=judge,
+        experiment="atif-digest-mixed",
+        evalhub_api_base=evalhub_api_base,
+        evalhub_tenant_token=evalhub_tenant_token,
+        evalhub_tenant_namespace=evalhub_tenant_namespace,
+        parameters={"partial_result_policy": "skip_failed_trajectory"},
+    ) | {"export": export}
+
+
+def test_a_verified_entry_still_scores_beside_a_wrong_digest(
+    mixed_digest_run: dict[str, Any],
+    tracking: TrackingServer,
+) -> None:
+    """AC3 under skip_failed_trajectory: the withheld entry does not take the export with it."""
+    assert mixed_digest_run["status"] == "completed", (
+        f"job ended {mixed_digest_run['status']}: {mixed_digest_run['message']}"
+    )
+    result = benchmark_result(mixed_digest_run["job"], BENCHMARK_ID)
+    metrics = _metrics(result)
+    assert metrics.get("atif_trajectory_count") == 1.0, f"the verified entry did not score on its own: {metrics}"
+    assert PRIMARY_METRIC in metrics, f"the verified entry scored without {PRIMARY_METRIC}: {metrics}"
+    metadata = _report(tracking.wait_for_artifact("atif-digest-mixed", ARTIFACT))["evaluation_metadata"]
+    scored = {item["trajectory_id"] for item in metadata["atif_trajectories"]}
+    assert scored == {"t0"}, f"the entry with the wrong digest was scored too: {scored}"
+    assert metadata["atif_failed_trajectory_count"] == 1, (
+        f"the withheld entry was not counted: {metadata['atif_failed_trajectory_count']}"
     )
 
 

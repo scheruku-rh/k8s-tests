@@ -203,14 +203,26 @@ def export_files(
     *,
     schema_version: str = V17,
     entries: int = 2,
-    digest_mismatch: bool = False,
+    digest_mismatch: bool | int = False,
     empty_manifest: bool = False,
     undeclared_field: str | None = None,
     unlisted: bool = True,
 ) -> dict[str, bytes]:
-    """A NeMo Gym export: the manifest, the documents it lists, and one it does not."""
+    """A NeMo Gym export: the manifest, the documents it lists, and one it does not.
+
+    `digest_mismatch` picks which entries declare a digest their bytes do not have:
+    `True` for all of them, an index for one, so a run can mix a verifiable entry with
+    a wrong one.
+    """
     files: dict[str, bytes] = {}
     rows: list[dict[str, Any]] = []
+    if digest_mismatch is True:
+        wrong_digest = set(range(entries))
+    elif digest_mismatch is False:
+        # `bool` is an `int`, so the two flags have to be handled before the index case.
+        wrong_digest = set()
+    else:
+        wrong_digest = {int(digest_mismatch)}
     for index in range(entries):
         name = f"0-{index}.json"
         payload = encoded(
@@ -223,8 +235,8 @@ def export_files(
             )
         )
         files[name] = payload
-        row = manifest_row(name, 0, index, None if digest_mismatch else payload)
-        if digest_mismatch:
+        row = manifest_row(name, 0, index, None if index in wrong_digest else payload)
+        if index in wrong_digest:
             row["expected_sha256"] = "0" * 64
         rows.append(row)
     if unlisted:
