@@ -42,6 +42,7 @@ IMAGE_ENV_VARS = (
     "LMES_IMG",
     "INSPECT_IMG",
     "LIGHTEVAL_IMG",
+    "ATIF_IMG",
 )
 # The two load-path images the harness computes from IMAGE_PREFIX and TAG, so a
 # value that is only that default can be told apart from one the caller chose.

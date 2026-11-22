@@ -14,7 +14,8 @@ from harness.shell import HarnessError
     [
         ("standard", "not adapters"),
         ("all", None),
-        ("adapters", "adapters"),
+        ("adapters", "adapters and not atif"),
+        ("adapters-atif", "atif"),
         ("evalhub", "evalhub and not adapters"),
         ("generation", "evalhub and generation"),
         ("isvc-free", "isvc_free"),

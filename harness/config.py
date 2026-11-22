@@ -54,6 +54,7 @@ IMAGE_RECORD_VARS = (
     "LMES_IMG",
     "INSPECT_IMG",
     "LIGHTEVAL_IMG",
+    "ATIF_IMG",
 )
 
 # Header `deploy` writes once the stack running the recorded images is up;
@@ -215,6 +216,18 @@ SETTINGS: tuple[Setting, ...] = (
         default="",
         help="LightEval adapter image; empty keeps the operator's pin",
     ),
+    Setting(
+        field="atif_img",
+        envvar="ATIF_IMG",
+        default="",
+        help="ATIF adapter image the adapters-atif section points EvalHub's provider at; empty keeps its pin",
+    ),
+    Setting(
+        field="mlflow_img",
+        envvar="MLFLOW_IMG",
+        default="",
+        help="MLflow tracking server image the adapters-atif section deploys; empty uses a public 3.x release",
+    ),
     Setting(field="timeout", envvar="TIMEOUT", default="300s", help="how long each kubectl wait and rollout may take"),
     Setting(field="emulator_img", envvar="EMULATOR_IMG", default="", help="LLM emulator image the fixtures deploy"),
     Setting(
@@ -251,6 +264,12 @@ SETTINGS: tuple[Setting, ...] = (
         envvar="ADAPTERS_MARKER",
         default="adapters",
         help="marker that selects the adapter section of the checks",
+    ),
+    Setting(
+        field="adapters_atif_report_file",
+        envvar="ADAPTERS_ATIF_REPORT_FILE",
+        default="reports/adapters-atif.html",
+        help="HTML report the adapters-atif section writes, so it does not overwrite the other ones",
     ),
     Setting(
         field="pytest_args",
@@ -360,6 +379,8 @@ class Settings:
     lmes_img: str = ""
     inspect_img: str = ""
     lighteval_img: str = ""
+    atif_img: str = ""
+    mlflow_img: str = ""
     timeout: str = "300s"
     emulator_img: str = ""
     emulator_namespace: str = ""
@@ -370,6 +391,7 @@ class Settings:
     report_file: str = "reports/report.html"
     adapters_report_file: str = "reports/adapters.html"
     adapters_marker: str = "adapters"
+    adapters_atif_report_file: str = "reports/adapters-atif.html"
     pytest_args: str = ""
     registry_port: str = DEFAULT_REGISTRY_PORT
     evalhub_repo: str = ""
@@ -434,6 +456,10 @@ class Settings:
     @property
     def adapters_report_path(self) -> Path:
         return Path(self.adapters_report_file).expanduser()
+
+    @property
+    def adapters_atif_report_path(self) -> Path:
+        return Path(self.adapters_atif_report_file).expanduser()
 
     def with_updates(self, **updates: Any) -> Settings:
         """These settings with some values replaced; the values other ones derive from follow them."""

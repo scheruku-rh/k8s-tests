@@ -25,6 +25,7 @@ SECTIONS = (
     "standard",
     "all",
     "adapters",
+    "adapters-atif",
     "evalhub",
     "generation",
     "isvc-free",
@@ -42,7 +43,14 @@ def section_marker(section: str, settings: Settings) -> str | None:
         case "all":
             return None
         case "adapters":
-            return adapters
+            # The ATIF checks are in this selection by marker but are their own, slower
+            # section: they deploy MLflow and a judge before their first job.
+            return f"{adapters} and not atif"
+        case "adapters-atif":
+            # The ATIF checks deploy MLflow and a judge, and each job is minutes of a
+            # Kind cluster's time, so they are never part of the default run either.
+            # The marker is `atif`: `-m` reads a hyphen as subtraction.
+            return "atif"
         case "evalhub":
             return f"evalhub and not {adapters}"
         case "generation":
@@ -68,9 +76,11 @@ def pytest_arguments(
     # --select names its own selection, so the section marker would narrow it behind the
     # caller's back; an explicit --marker still applies.
     expression = marker or (None if tokens else section_marker(section, settings))
-    target = Path(
-        report or (settings.adapters_report_file if section == "adapters" and not tokens else settings.report_file)
-    )
+    section_report = {
+        "adapters": settings.adapters_report_file,
+        "adapters-atif": settings.adapters_atif_report_file,
+    }
+    target = Path(report or (section_report.get(section) if not tokens else None) or settings.report_file)
 
     root = resources.tests_root()
     arguments = [sys.executable, "-m", "pytest", *(_inside(root, token) for token in tokens)]

@@ -56,6 +56,7 @@ markers = [
     "benchmark: checks that submit an evaluation job and read its results",
     "lmeval: checks for an LMEvalJob: its execution Pod and the NetworkPolicy that guards it",
     "adapters: EvalHub adapters: one real benchmark per job, run as a section of their own",
+    "atif: the ATIF adapter section: MLflow, generated trajectories and the manifest, provenance, unscored and version-range behaviour",
     "module: checks for the TrustyAI module operator and the TrustyAI resource it reconciles",
     "isvc_free: checks that both operators work on a cluster with no KServe InferenceService API",
     "tas_payload: checks that the TrustyAIService operator writes payload capture into a KServe InferenceService, with the API installed",
