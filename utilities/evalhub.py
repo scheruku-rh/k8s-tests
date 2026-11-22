@@ -572,3 +572,76 @@ def benchmark_result(job: dict[str, Any], benchmark_id: str) -> dict[str, Any]:
         f"job {((job.get('resource') or {}).get('id'))} reported no result for {benchmark_id!r}; results: {results}",
         pytrace=False,
     )
+
+
+def patch_instance_spec(
+    dynamic_client: DynamicClient,
+    api_version: str,
+    name: str,
+    namespace: str,
+    spec: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge top-level keys into an EvalHub instance's spec in one patch.
+
+    One patch is one reconcile, and therefore one rollout: an env value and a provider
+    list patched separately would roll the Pod twice and leave the checks racing the
+    second one.
+    """
+    resource = _evalhub_resource(dynamic_client, api_version)
+    LOGGER.info("patching %s/%s spec with %s", name, namespace, sorted(spec))
+    return resource.patch(
+        name=name,
+        namespace=namespace,
+        body={"spec": spec},
+        content_type="application/merge-patch+json",
+    ).to_dict()
+
+
+def wait_for_container_env(
+    apps_client: client.AppsV1Api,
+    name: str,
+    namespace: str,
+    container_name: str,
+    env_name: str,
+    expected: str,
+    timeout: int = DEFAULT_WAIT_TIMEOUT,
+    interval: int = 5,
+) -> None:
+    """Wait until the Deployment the operator rolled carries an env value.
+
+    Changing `spec.env` makes the operator rewrite the Deployment, so the value is only
+    in effect once the new pod template is the one that is available; a test that reads
+    the CR alone would race the rollout.
+    """
+    deadline = time.monotonic() + timeout
+    last = ""
+    while True:
+        deployment = apps_client.read_namespaced_deployment(name=name, namespace=namespace)
+        containers = ((deployment.spec.template.spec or None) and deployment.spec.template.spec.containers) or []
+        for container in containers:
+            if container.name != container_name:
+                continue
+            for env in container.env or []:
+                if env.name == env_name:
+                    last = env.value or ""
+        status = deployment.status
+        # A surplus Pod means the rollout is not finished: an old Pod that is still
+        # serving keeps `available_replicas` at the replica count while the new template's
+        # Pod is not ready, which is exactly how a crash-looping replacement hides.
+        rolled = (
+            status.updated_replicas == deployment.spec.replicas
+            and status.ready_replicas == deployment.spec.replicas
+            and status.available_replicas == deployment.spec.replicas
+            and status.replicas == deployment.spec.replicas
+            and (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
+        )
+        if last == expected and rolled:
+            LOGGER.info("%s/%s container %s runs with %s=%s", namespace, name, container_name, env_name, expected)
+            return
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"{namespace}/{name} did not roll out with {env_name}={expected} within {timeout}s "
+                f"(last value {last!r})",
+                pytrace=False,
+            )
+        time.sleep(interval)
