@@ -276,6 +276,8 @@ Every one is a flag and an environment variable; `k8s-tests --help` lists them a
 | `MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | Model name a job submits |
 | `WORKLOAD_IMG` | `localhost/trustyai-service-operator:dev` | Workload operator image reference |
 | `MODULE_IMG` | `localhost/trustyai-operator-module:dev` | Module operator image reference |
+| `ATIF_IMG` | *(empty)* | ATIF adapter image the adapters-atif section points EvalHub's provider at; empty keeps the operator's pin |
+| `MLFLOW_IMG` | *(empty)* | MLflow tracking server the adapters-atif section deploys; empty uses `ghcr.io/mlflow/mlflow:v3.1.0` |
 | `EVALHUB_IMG` | *(empty)* | EvalHub operand image; empty keeps the operator's own pin (`quay.io/evalhub/evalhub:latest`) |
 | `TRUSTYAI_SERVICE_IMG` | `quay.io/trustyai/trustyai-service:latest` | TrustyAI service operand image, passed through `RELATED_IMAGE_ODH_TRUSTYAI_SERVICE_PY_IMAGE`; set it to a build under test |
 | `KUBE_RBAC_PROXY_IMG` | *(empty)* | kube-rbac-proxy sidecar image, passed through `RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE`; set it to an arm64 build of `opendatahub-io/kube-rbac-proxy` on Apple Silicon (see Troubleshooting) |
@@ -609,6 +611,81 @@ k8s-tests test --section all                  # every section, the adapters incl
 k8s-tests test --select '-m adapters'         # the same selection, into the usual report
 ```
 
+## ATIF adapter: manifests, provenance, unscored jobs and version range
+
+`tests/evalhub/test_evalhub_atif.py` is its own section because it has to build the
+world the adapter reads: it deploys an MLflow tracking server, tells the EvalHub
+instance about it, deploys a stub judge, generates NeMo Gym-shaped ATIF exports, and
+only then submits jobs. It pins the behaviour RHAI-22310 defines, per check:
+
+| What the check pins | What it asserts |
+| --- | --- |
+| Manifest joining (`atif_manifest_entry_count`, `atif_trajectory_count`) | the manifest is authoritative: the entry count is the manifest's, the trajectory count is what scored, and a file the manifest does not list is not loaded |
+| Provenance (AC3) | the run's `atif/evaluation_results.json` carries the manifest's task/rollout indices, `digest_verified: true`, and the producer's declared `extra` object verbatim |
+| Digest mismatch under `fail_fast` | the job fails naming the file whose bytes do not match the digest its manifest declares |
+| Digest mismatch under `skip_failed_trajectory` | the job completes, the entry contributes no score, and no `atif_overall_score` is invented |
+| Unscored reporting (AC4) | with every judge call failing, the job completes, publishes no `atif_overall_score`, and reports `atif_complete: false` with its counts |
+| Empty manifest (AC5) | under `skip_invalid` the job completes with the invalid manifest counted, rather than crashing |
+| Version range (AC7) | an `ATIF-v1.6` export still scores, an `ATIF-v1.9` export fails naming `ATIF-v1.0 through ATIF-v1.8` |
+| Declared-field policy (AC3) | a root field the ATIF model does not declare is invalid input (`invalid_schema`), not silently dropped |
+
+The export is generated, not downloaded: `utilities/atif.py` writes ATIF documents and
+a `manifest.jsonl` whose rows carry `trajectory_path`, `_ng_task_index`,
+`_ng_rollout_index` and `expected_sha256`, which is the shape `gym eval export atif`
+produces. A one-shot Pod copies them from a ConfigMap onto a PersistentVolumeClaim,
+and the job names that claim as its `test_data_ref`, so the adapter mounts it at
+`/test_data` the way the platform mounts real pre-recorded data.
+
+MLflow matters here because the adapter requires an `experiment_name` and writes its
+report there: without a tracking server the API refuses a job that names an
+experiment, and the adapter has nowhere to put the per-node provenance above. The
+section deploys `ghcr.io/mlflow/mlflow` (override with `MLFLOW_IMG`), patches the
+instance's `spec.env` with `MLFLOW_TRACKING_URI`, waits for the rollout, and creates
+the experiment through the job's `experiment.name`. Artifacts are read back over a
+forwarded port, through the same artifact API the SDK writes to.
+
+`ATIF_IMG` says which adapter image the section is testing. It cannot be changed on a
+running cluster: the provider ConfigMaps are rendered into the operator image from
+`config/overlays/*/params.env`, and the operator re-applies them within about thirty
+seconds, so a patch to the ConfigMap is reverted - and unlike inspect and lighteval,
+`evalhub-provider-atif-image` has no `RELATED_IMAGE_*` resolver key. Set that key in
+the operator checkout before `k8s-tests up-registry`, which is what
+`run-atif-section.sh` in the NemoGym notes directory does (it restores the file
+afterwards). The fixture then verifies that the provider really runs that image and
+fails with the remediation rather than quietly exercising the pin;
+`ATIF_ALLOW_PINNED_IMAGE=1` tests the pin on purpose.
+
+Two things this section has to work around on Kind, both of which are deployment
+facts rather than adapter behaviour. Its instance is created without a provider list
+that includes `atif`, so the fixture patches `spec.providers` - the operator only
+copies a provider's ConfigMap into the instance namespace for a provider the instance
+names, and EvalHub only serves what it has a ConfigMap for. And EvalHub parses
+`MLFLOW_CA_CERT_PATH` as soon as it has a tracking URI: Kind has no service-serving
+CA, so the operator's merged bundle is empty and the Pod exits with "file contains no
+valid PEM certificates" until the instance is given `spec.mlflow.tls.caBundle`. The
+fixture seeds that bundle and patches providers, the tracking URI and the CA in one
+patch, then waits for the completed rollout - not merely an available Pod, which an
+old revision keeps reporting while the replacement crash-loops.
+
+The operator this section runs must be one whose TrustyAIService controller does not
+watch `serving.kserve.io` (trustyai-service-operator#1124/#1127): on a checkout that
+still watches it, the harness installs no `InferenceService` CRD stand-in - it does
+that only for a pre-module layout or a declared 3.6-or-older release - and the operator
+crash-loops on its cache sync, which makes every check here time out. `run-atif-section.sh`
+builds from the reference checkout for that reason; a checkout that still watches the kind
+needs `--serving-crd always`.
+
+The section carries `evalhub`, `adapters` and `atif`: `atif` selects it, and
+`--section adapters` leaves it out because it deploys more than a benchmark and runs
+seven jobs. It is slow - each job pulls the adapter image, runs judge calls and writes
+to MLflow - and it is opt-in only:
+
+```sh
+k8s-tests images && k8s-tests deploy-registry   # build and deploy the ATIF image, records ATIF_IMG
+k8s-tests test --section adapters-atif                  # only this section, into reports/adapters-atif.html
+k8s-tests test --select '-m atif' --keep-resources   # leave the jobs and their pods behind
+```
+
 ## Collection generation authorization
 
 `tests/evalhub/test_evalhub_collection_generation.py` covers the authorization
@@ -845,6 +922,7 @@ operators.
 | `tests/test_emulator.py` | the LLM emulator (skipped when `MODEL_URL` is set): its Deployment runs the pinned image and is healthy, `/health` needs no token, `/v1/completions` and `/v1/chat/completions` answer `401` without the token or with another one and `200` with the token from the `vllm-emulator-auth` Secret, that Secret carries the `api-key` key `model.auth.secret_ref` resolves, and the token check reports which token fingerprint it saw |
 | `tests/evalhub/test_evalhub_benchmark.py` | a benchmark job: the API accepts a job for `arc_easy` with `num_examples: 1` against the emulator or `MODEL_URL`, it reaches `completed`, its results carry the benchmark id, provider and numeric metrics, and - against the emulator - the emulator saw the tenant Secret's token (or `MODEL_KEY`) on a `/v1` request |
 | `tests/evalhub/test_evalhub_adapters.py` | the EvalHub adapters section (opt-in, `k8s-tests test --section adapters`): each benchmark in its table - currently `ethics_cm` of `lm_evaluation_harness`, with `num_examples: 1` against the emulator or `MODEL_URL` - is accepted as the job's only benchmark, reaches `completed`, reports the benchmark, provider, numeric metrics and the `acc` its provider scores it on, turns its pass criteria into a test outcome, and - against the emulator - the emulator authenticated the model requests it made |
+| `tests/evalhub/test_evalhub_atif.py` | the ATIF adapter section (opt-in, `k8s-tests test --section adapters-atif`): it deploys an MLflow tracking server and a stub judge, points the instance at MLflow, publishes a generated NeMo Gym export onto a claim, and asserts that the manifest drives discovery and its entry count, that the run's report keeps the manifest indices, digest verdict and the producer's `extra`, that a digest mismatch fails naming the file or withholds the score depending on `partial_result_policy`, that an unscored job publishes no `atif_overall_score` and reports `atif_complete: false`, that an empty manifest and an undeclared root field are invalid input, that ATIF-v1.6 still scores and ATIF-v1.9 fails naming the supported range |
 | `tests/evalhub/test_evalhub_collection_generation.py` | the authorization `trustyai-service-operator#1131` added for the collection generation API: the mounted policy maps `POST /api/v1/evaluations/collections/generation` to `evaluations create` and `GET`/`DELETE .../generation/{id}` to `evaluations` `{{.FromMethod}}`, each declared once with the `X-Tenant` rewrite and ahead of the generic `/api/v1/evaluations/collections/*` entry that also maps `get` and `delete`; the removed `.../generation/models` path has no mapping; the pod template's `auth.yaml` digest describes the policy the container mounts; the tenant-user Role grants `evaluations` `get`/`create`/`delete` and no collection write; and, as an identity granted exactly those rules, all three paths answer through the proxy (not `401`/`403`), need a token, and are refused when `X-Tenant` names a namespace the identity has no grant in |
 | `tests/lmeval/test_lmeval_network_policy.py` | an `LMEvalJob`: the operator creates one NetworkPolicy, owned by the job, admitting no ingress and one allow-all egress rule, selecting the Pod on the identity labels it also stamps there; taking any of the four identity labels off the Pod is repaired (also for a completed job, where only the Pod watch is left to trigger it); editing the policy's rules is repaired while an annotation the operator does not own is kept; and deleting the policy brings a replacement with a new UID rather than reviving the old one |
 | `tests/test_trustyai_serving_payload_capture.py` | payload capture on an installed API (`k8s-tests test --section tas-payload`, 3.7 on): installs the `InferenceService` stand-in, writes a mock `InferenceService` beside a `TrustyAIService`, and asserts the predictor's logger is that service's https sink in mode `all`, the `InferenceServicesPresent=True` / `InferenceServicesFound` condition, the module reporting the API `Available` without a restart, that a pass finding the desired logger writes nothing, and that deleting the service takes the logger and the `internal.serving.kserve.io/*` annotations back. Removes the CRD again. See [What `--section tas-payload` asserts](#what---section-tas-payload-asserts) |

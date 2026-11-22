@@ -261,6 +261,8 @@ def images_all(settings: Settings) -> None:
                 recorded["INSPECT_IMG"] = image
             case "lighteval":
                 recorded["LIGHTEVAL_IMG"] = image
+            case "atif":
+                recorded["ATIF_IMG"] = image
 
     if registry.builds_lmes(settings):
         lmes = registry.registry_reference(settings, "evalhub/community-lmes")
