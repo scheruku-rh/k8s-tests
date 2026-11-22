@@ -617,6 +617,9 @@ def wait_for_container_env(
     last = ""
     while True:
         deployment = apps_client.read_namespaced_deployment(name=name, namespace=namespace)
+        # The value and the rollout status have to come from the same snapshot: a value
+        # read from an earlier template must not satisfy a rollout of a later one.
+        last = ""
         containers = ((deployment.spec.template.spec or None) and deployment.spec.template.spec.containers) or []
         for container in containers:
             if container.name != container_name:
