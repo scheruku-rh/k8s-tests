@@ -410,17 +410,27 @@ def test_the_run_records_manifest_provenance(
     manifest_run: dict[str, Any],
     tracking: TrackingServer,
 ) -> None:
-    """AC3: the run's report carries the manifest indices, the digest verdict and the producer's extra."""
+    """AC3: each scored trajectory carries its own manifest indices, digest verdict and producer extra."""
     assert manifest_run["status"] == "completed", manifest_run["message"]
-    report = tracking.wait_for_artifact("atif-manifest", ARTIFACT)
-    assert '"nemo_gym_manifest"' in report, f"the report has no manifest provenance: {report[:1000]}"
-    assert '"digest_verified": true' in report, (
-        f"the manifest digest the producer declared was not verified: {report[:1000]}"
+    export: Export = manifest_run["export"]
+    metadata = _report(tracking.wait_for_artifact("atif-manifest", ARTIFACT))["evaluation_metadata"]
+    scored = {item["trajectory_id"]: item for item in metadata["atif_trajectories"]}
+    assert set(scored) == {f"t{index}" for index in range(export.entries)}, (
+        f"the report scored {sorted(scored)}, not the manifest's entries"
     )
-    assert '"producer_extra"' in report, f"the producer's extra was not preserved: {report[:1000]}"
-    assert '"producer_sha256": "sha256-of-t0"' in report, (
-        f"the producer's own field is missing from the report: {report[:1000]}"
-    )
+    for index in range(export.entries):
+        entry = scored[f"t{index}"]
+        provenance = entry["provenance"]
+        manifest = provenance["nemo_gym_manifest"]
+        assert manifest["task_index"] == 0, f"t{index} carries task {manifest['task_index']}"
+        assert manifest["rollout_index"] == index, f"t{index} carries rollout {manifest['rollout_index']}"
+        assert manifest["digest_verified"] is True, f"t{index}'s digest was not verified: {manifest}"
+        assert entry["source_path"].endswith(f"0-{index}.json"), (
+            f"t{index} came from {entry['source_path']}, not the file the manifest lists for it"
+        )
+        assert provenance["producer_extra"]["producer_sha256"] == f"sha256-of-t{index}", (
+            f"t{index} carries another trajectory's producer extra: {provenance['producer_extra']}"
+        )
 
 
 @pytest.fixture(scope="module")
