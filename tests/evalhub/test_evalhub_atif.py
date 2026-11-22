@@ -623,6 +623,11 @@ def test_an_unscored_job_publishes_no_overall_score(unscored_run: dict[str, Any]
         f"an unscored job published overall_score {result.get('overall_score')!r}"
     )
     assert metrics.get("atif_trajectory_count") == 0.0, f"the result counted a scored trajectory: {metrics}"
+    assert metrics.get("atif_manifest_entry_count") == float(unscored_run["export"].entries), (
+        f"the result lost the entry count it kept: {metrics}"
+    )
+    index = (result.get("artifacts") or {}).get("evalhub.atif_report") or {}
+    assert index.get("complete") is False, f"an unscored job reported itself complete: {index}"
     test = result.get("test")
     assert not test or not test.get("pass"), f"an unscored job passed its threshold: {test}"
 
