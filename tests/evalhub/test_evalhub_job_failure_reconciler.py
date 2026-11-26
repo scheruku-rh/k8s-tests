@@ -8,8 +8,8 @@ which is fatal without any grace period and is covered from release 3.6 as a
 regression check. Both must end with the benchmark failed in EvalHub, the
 reason in its error message, and the Kubernetes Job promoted to Failed.
 
-The section is its own because the grace case waits out most of the operator's
-ten minutes: the pair runs about 13 minutes, too slow for the default run.
+The grace case is its own section because it waits out most of the operator's
+ten minutes; the invalid-image-name case is quick and stays in the default run.
 """
 
 from __future__ import annotations
@@ -43,7 +43,6 @@ LOGGER = logging.getLogger(__name__)
 
 pytestmark = [
     pytest.mark.evalhub,
-    pytest.mark.failure_reconciler,
     pytest.mark.usefixtures("evalhub_tenant_ca", "reconciler_test_ca"),
 ]
 
@@ -141,14 +140,15 @@ def reconciler_test_ca(
     [
         # The grace this case asserts is what trustyai-service-operator#1139
         # added and release 3.7 ships first: an operator without it reports
-        # ImagePullBackOff immediately, so the case is gated to that release.
+        # ImagePullBackOff immediately, so the case is gated to that release and
+        # to its own section: it waits out most of the operator's ten minutes.
         pytest.param(
             f"registry.k8s.io/pause:evalhub-missing-{uuid4().hex}",
             "ImagePullBackOff",
             570,
             750,
             id="image-pull-grace",
-            marks=release(min="3.7"),
+            marks=[release(min="3.7"), pytest.mark.image_pull_grace],
         ),
         # Fatal waiting reasons are reported without a grace period on the
         # operators release 3.6 already ships: a regression check from there.
