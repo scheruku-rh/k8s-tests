@@ -2,44 +2,53 @@
 
 Two shapes are covered: an adapter image whose tag does not exist, which kubelet
 keeps retrying (ImagePullBackOff) and the operator only reports once the
-ten-minute grace period has passed, and a malformed image reference
-(InvalidImageName), which is fatal without any grace period. Both must end with
-the benchmark failed in EvalHub, the reason in its error message, and the
-Kubernetes Job promoted to Failed.
+ten-minute grace period trustyai-service-operator#1139 added has passed - first
+shipped in release 3.7 - and a malformed image reference (InvalidImageName),
+which is fatal without any grace period and is covered from release 3.6 as a
+regression check. Both must end with the benchmark failed in EvalHub, the
+reason in its error message, and the Kubernetes Job promoted to Failed.
+
+The section is its own because the grace case waits out most of the operator's
+ten minutes: the pair runs about 13 minutes, too slow for the default run.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
-import requests
 from kubernetes import client
 
 from utilities.evalhub import (
-    EVALHUB_JOBS_PATH,
+    WAIT_INTERVAL,
     api_headers,
+    create_provider,
+    delete_job,
+    delete_provider,
     instance_tls_cert,
     read_job,
     submit_job,
     wait_for_container_env,
     wait_for_job,
 )
+from utilities.kube import keep_resources
 from utilities.model import ModelEndpoint
+from utilities.release import release
 from utilities.trustyai import WORKLOAD_OPERATOR_DEPLOYMENT
+
+LOGGER = logging.getLogger(__name__)
 
 pytestmark = [
     pytest.mark.evalhub,
-    pytest.mark.benchmark,
+    pytest.mark.failure_reconciler,
     pytest.mark.usefixtures("evalhub_tenant_ca", "reconciler_test_ca"),
 ]
 
-PROVIDERS_PATH = "/api/v1/evaluations/providers"
 FAILURE_PHASE = "trustyai.opendatahub.io/evaluation-phase"
 FAILURE_REPORTED = "trustyai.opendatahub.io/evalhub-failure-reported"
-POLL_INTERVAL = 5
 
 
 @pytest.fixture(scope="module")
@@ -54,9 +63,10 @@ def reconciler_test_ca(
     """Trust the harness-generated EvalHub certificate for the operator's callbacks on Kind.
 
     On OpenShift the operator already trusts the service CA that signs the
-    in-cluster certificate, so the patch is Kind-only. The workload operator's
-    Deployment is patched in place and restored afterwards; the module operator
-    deploys it once, so nothing re-renders it under the patch mid-run.
+    in-cluster certificate, so the patch is Kind-only. The module operator can
+    reconcile this Deployment while the patch is in place: what preserves the
+    patch is field ownership - the CA environment variable, volume and mount
+    stay outside the fields the module operator's server-side apply owns.
     `evalhub_instance` is requested only for ordering: it is what creates the
     TLS secret `instance_tls_cert` reads.
     """
@@ -129,15 +139,28 @@ def reconciler_test_ca(
 @pytest.mark.parametrize(
     ("image", "reason", "minimum_wait", "deadline"),
     [
-        (
+        # The grace this case asserts is what trustyai-service-operator#1139
+        # added and release 3.7 ships first: an operator without it reports
+        # ImagePullBackOff immediately, so the case is gated to that release.
+        pytest.param(
             f"registry.k8s.io/pause:evalhub-missing-{uuid4().hex}",
             "ImagePullBackOff",
             570,
             750,
+            id="image-pull-grace",
+            marks=release(min="3.7"),
         ),
-        ("registry.k8s.io/pause:invalid/tag", "InvalidImageName", 0, 120),
+        # Fatal waiting reasons are reported without a grace period on the
+        # operators release 3.6 already ships: a regression check from there.
+        pytest.param(
+            "registry.k8s.io/pause:invalid/tag",
+            "InvalidImageName",
+            0,
+            120,
+            id="invalid-image-name",
+            marks=release(min="3.6"),
+        ),
     ],
-    ids=["image-pull-grace", "invalid-image-name"],
 )
 def test_reconciler_reports_image_failure(
     core_client: client.CoreV1Api,
@@ -152,20 +175,17 @@ def test_reconciler_reports_image_failure(
 ) -> None:
     namespace = evalhub_tenant_namespace
     headers = api_headers(evalhub_tenant_token, namespace)
-    provider_response = requests.post(
-        f"{evalhub_api_base}{PROVIDERS_PATH}",
-        headers=headers,
-        json={
+    provider = create_provider(
+        evalhub_api_base,
+        headers,
+        {
             "name": f"image-failure-{uuid4().hex}",
             "title": "Image failure regression",
             "runtime": {"k8s": {"image": image, "entrypoint": ["/unused"]}},
             "benchmarks": [{"id": "image-failure", "name": "Image failure", "category": "test"}],
         },
-        verify=False,
-        timeout=30,
     )
-    assert provider_response.status_code == 201, provider_response.text
-    provider_id = provider_response.json()["resource"]["id"]
+    provider_id = provider["resource"]["id"]
     job_id = None
     try:
         submission = submit_job(
@@ -189,15 +209,19 @@ def test_reconciler_reports_image_failure(
                 for container in (pod.status.init_container_statuses or []) + (pod.status.container_statuses or []):
                     waiting = container.state.waiting
                     if waiting:
-                        observed_states.add(f"{container.name}: {waiting.reason} ({waiting.message})")
+                        state = f"{container.name}: {waiting.reason} ({waiting.message})"
+                        if state not in observed_states:
+                            LOGGER.info("evaluation %s: container state %s", job_id, state)
+                            observed_states.add(state)
             if any(state.startswith(f"adapter: {reason} (") for state in observed_states):
+                observed_at = time.monotonic()
                 break
             status = read_job(evalhub_api_base, headers, job_id)["status"]
             assert status["state"] in ("pending", "running"), (
                 f"evaluation {job_id} ended before the adapter entered {reason}: "
                 f"{status}; observed container states: {sorted(observed_states)}"
             )
-            time.sleep(POLL_INTERVAL)
+            time.sleep(WAIT_INTERVAL)
         else:
             pytest.fail(
                 f"adapter for evaluation {job_id} never entered {reason}; "
@@ -205,16 +229,15 @@ def test_reconciler_reports_image_failure(
                 pytrace=False,
             )
 
-        # The operator measures the grace from kubelet's first BackOff Event, which can
-        # precede this observation, so the wait stays below the operator's ten minutes.
-        grace_end = time.monotonic() + minimum_wait
-        while time.monotonic() < grace_end:
-            status = read_job(evalhub_api_base, headers, job_id)["status"]
-            assert status["state"] in ("pending", "running"), f"job ended inside grace: {status}"
-            time.sleep(POLL_INTERVAL)
-
-        finished = wait_for_job(
-            evalhub_api_base, headers, job_id, timeout=deadline - minimum_wait, interval=POLL_INTERVAL
+        # The operator's grace clock starts at the first BackOff Event, which can
+        # precede this observation, so the elapsed time is asserted once the job
+        # ends rather than polled inside the window: an early report still fails,
+        # but a slow poll can no longer turn a healthy run into a failure.
+        finished = wait_for_job(evalhub_api_base, headers, job_id, timeout=deadline, interval=WAIT_INTERVAL)
+        elapsed = time.monotonic() - observed_at
+        assert elapsed >= minimum_wait, (
+            f"evaluation {job_id} failed {elapsed:.0f}s after the adapter entered {reason}, "
+            f"short of the {minimum_wait}s grace period the operator must honor"
         )
         status = finished["status"]
         assert status["state"] == "failed", status
@@ -232,7 +255,7 @@ def test_reconciler_reports_image_failure(
                 for job in jobs
             ):
                 break
-            time.sleep(POLL_INTERVAL)
+            time.sleep(WAIT_INTERVAL)
         else:
             pytest.fail(
                 f"operator did not promote the Kubernetes Job for evaluation {job_id} to Failed "
@@ -240,19 +263,17 @@ def test_reconciler_reports_image_failure(
                 pytrace=False,
             )
     finally:
-        try:
-            if job_id:
-                requests.delete(
-                    f"{evalhub_api_base}{EVALHUB_JOBS_PATH}/{job_id}",
-                    params={"hard_delete": "true"},
-                    headers=headers,
-                    verify=False,
-                    timeout=30,
-                ).raise_for_status()
-        finally:
-            requests.delete(
-                f"{evalhub_api_base}{PROVIDERS_PATH}/{provider_id}",
-                headers=headers,
-                verify=False,
-                timeout=30,
-            ).raise_for_status()
+        if keep_resources():
+            LOGGER.warning(
+                "KEEP_RESOURCES is set: leaving evaluation job %s with its pod and adapter logs, "
+                "and provider %s, in namespace %s for inspection",
+                job_id,
+                provider_id,
+                namespace,
+            )
+        else:
+            try:
+                if job_id:
+                    delete_job(evalhub_api_base, headers, job_id)
+            finally:
+                delete_provider(evalhub_api_base, headers, provider_id)

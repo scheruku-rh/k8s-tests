@@ -2,11 +2,12 @@
 
 Selection has two axes: a directory names a component (tests/evalhub), a marker names a
 section within it (evalhub, benchmark, adapters, generation). `--select` takes any pytest
-selection, so a section, a directory, a node id or -k all work. Two sections are their own
-because a full run of them is slow: the adapter checks each submit a real benchmark that
-takes minutes, and the isvc-free checks restart both operators to prove they start with no
-serving API. `tas-payload` is the other side of that one - it installs the serving API and
-runs after `isvc-free`, in the order the report keeps.
+selection, so a section, a directory, a node id or -k all work. Three sections are their
+own because a full run of them is slow: the adapter checks each submit a real benchmark
+that takes minutes, the failure-reconciler checks wait out the operator's ten-minute
+image-pull grace, and the isvc-free checks restart both operators to prove they start
+with no serving API. `tas-payload` is the other side of that one - it installs the
+serving API and runs after `isvc-free`, in the order the report keeps.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ SECTIONS = (
     "adapters",
     "adapters-atif",
     "evalhub",
+    "failure-reconciler",
     "generation",
     "isvc-free",
     "lmeval",
@@ -39,7 +41,7 @@ def section_marker(section: str, settings: Settings) -> str | None:
     adapters = settings.adapters_marker
     match section:
         case "standard":
-            return f"not {adapters}"
+            return f"not {adapters} and not failure_reconciler"
         case "all":
             return None
         case "adapters":
@@ -52,7 +54,11 @@ def section_marker(section: str, settings: Settings) -> str | None:
             # The marker is `atif`: `-m` reads a hyphen as subtraction.
             return "atif"
         case "evalhub":
-            return f"evalhub and not {adapters}"
+            return f"evalhub and not {adapters} and not failure_reconciler"
+        case "failure-reconciler":
+            # The image-failure checks wait out the operator's ten-minute image-pull
+            # grace, so they are never part of the default run either.
+            return "failure_reconciler"
         case "generation":
             return "evalhub and generation"
         case "isvc-free":

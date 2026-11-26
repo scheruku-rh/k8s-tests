@@ -923,6 +923,7 @@ operators.
 | `tests/evalhub/test_evalhub_benchmark.py` | a benchmark job: the API accepts a job for `arc_easy` with `num_examples: 1` against the emulator or `MODEL_URL`, it reaches `completed`, its results carry the benchmark id, provider and numeric metrics, and - against the emulator - the emulator saw the tenant Secret's token (or `MODEL_KEY`) on a `/v1` request |
 | `tests/evalhub/test_evalhub_adapters.py` | the EvalHub adapters section (opt-in, `k8s-tests test --section adapters`): each benchmark in its table - currently `ethics_cm` of `lm_evaluation_harness`, with `num_examples: 1` against the emulator or `MODEL_URL` - is accepted as the job's only benchmark, reaches `completed`, reports the benchmark, provider, numeric metrics and the `acc` its provider scores it on, turns its pass criteria into a test outcome, and - against the emulator - the emulator authenticated the model requests it made |
 | `tests/evalhub/test_evalhub_atif.py` | the ATIF adapter section (opt-in, `k8s-tests test --section adapters-atif`): it deploys an MLflow tracking server and a stub judge, points the instance at MLflow, publishes a generated NeMo Gym export onto a claim, and asserts that the manifest drives discovery and its entry count, that the run's report keeps the manifest indices, digest verdict and the producer's `extra`, that a digest mismatch fails naming the file or withholds the score depending on `partial_result_policy`, that an unscored job publishes no `atif_overall_score` and reports `atif_complete: false`, that an empty manifest and an undeclared root field are invalid input, that ATIF-v1.6 still scores and ATIF-v1.9 fails naming the supported range |
+| `tests/evalhub/test_evalhub_job_failure_reconciler.py` | the evaluation-job failure reconciler (own section, `k8s-tests test --section failure-reconciler`, about 13 minutes): an adapter image that cannot be pulled is reported by the operator instead of hanging - a nonexistent tag stays `pending` through the ten-minute grace [trustyai-service-operator#1139](https://github.com/trustyai-explainability/trustyai-service-operator/pull/1139) added (3.7 on, `@release(min="3.7")`) and then fails with `ImagePullBackOff` in the benchmark's error message, and a malformed image reference fails within minutes naming `InvalidImageName` (3.6 on, `@release(min="3.6")`); both leave the Kubernetes Job labelled `evaluation-phase=Failed` with `evalhub-failure-reported=true`, a Kind-only fixture teaches the operator's callback client the instance certificate, and `--keep-resources` keeps the job with its pod and adapter logs and its provider |
 | `tests/evalhub/test_evalhub_collection_generation.py` | the authorization `trustyai-service-operator#1131` added for the collection generation API: the mounted policy maps `POST /api/v1/evaluations/collections/generation` to `evaluations create` and `GET`/`DELETE .../generation/{id}` to `evaluations` `{{.FromMethod}}`, each declared once with the `X-Tenant` rewrite and ahead of the generic `/api/v1/evaluations/collections/*` entry that also maps `get` and `delete`; the removed `.../generation/models` path has no mapping; the pod template's `auth.yaml` digest describes the policy the container mounts; the tenant-user Role grants `evaluations` `get`/`create`/`delete` and no collection write; and, as an identity granted exactly those rules, all three paths answer through the proxy (not `401`/`403`), need a token, and are refused when `X-Tenant` names a namespace the identity has no grant in |
 | `tests/lmeval/test_lmeval_network_policy.py` | an `LMEvalJob`: the operator creates one NetworkPolicy, owned by the job, admitting no ingress and one allow-all egress rule, selecting the Pod on the identity labels it also stamps there; taking any of the four identity labels off the Pod is repaired (also for a completed job, where only the Pod watch is left to trigger it); editing the policy's rules is repaired while an annotation the operator does not own is kept; and deleting the policy brings a replacement with a new UID rather than reviving the old one |
 | `tests/test_trustyai_serving_payload_capture.py` | payload capture on an installed API (`k8s-tests test --section tas-payload`, 3.7 on): installs the `InferenceService` stand-in, writes a mock `InferenceService` beside a `TrustyAIService`, and asserts the predictor's logger is that service's https sink in mode `all`, the `InferenceServicesPresent=True` / `InferenceServicesFound` condition, the module reporting the API `Available` without a restart, that a pass finding the desired logger writes nothing, and that deleting the service takes the logger and the `internal.serving.kserve.io/*` annotations back. Removes the CRD again. See [What `--section tas-payload` asserts](#what---section-tas-payload-asserts) |
@@ -932,15 +933,16 @@ operators.
 
 Two axes select what runs, and they compose: a **directory** names a component
 (`tests/evalhub`), a **marker** names a section within it (`evalhub`, `benchmark`,
-`adapters`, `generation`, `isvc_free`, `tas_payload`, `module`, `service`, `emulator`,
-`workload`).
+`failure_reconciler`, `adapters`, `generation`, `isvc_free`, `tas_payload`, `module`,
+`service`, `emulator`, `workload`).
 Every module in a component directory carries that component's marker as well as its
 own, so a section is both part of its component and runnable on its own.
 
 ```sh
-k8s-tests test                                              # everything except the adapters
-k8s-tests test --section evalhub                            # all EvalHub checks, adapters excluded
+k8s-tests test                                              # everything except the adapters and the failure reconciler
+k8s-tests test --section evalhub                            # all EvalHub checks, adapters and failure reconciler excluded
 k8s-tests test --section generation                         # just the collection generation authorization
+k8s-tests test --section failure-reconciler                 # just the image-failure reporting checks (slow: about 13 minutes)
 k8s-tests test --section adapters                           # just the adapter jobs (slow, own report)
 k8s-tests test --section lmeval                             # just the LMEvalJob checks
 k8s-tests test --section isvc-free                          # just the no-serving-API install
@@ -972,7 +974,9 @@ filter is what you want; `test-select` runs only the selection.
 
 `-m evalhub` includes the adapter jobs, because they are EvalHub checks too; they
 are excluded from `k8s-tests test` and `--section evalhub` by the `adapters` marker
-rather than by not being marked. See [EvalHub adapters](#evalhub-adapters).
+rather than by not being marked, and the failure-reconciler checks are excluded the
+same way by the `failure_reconciler` marker: their grace case waits out most of the
+operator's ten-minute image-pull grace. See [EvalHub adapters](#evalhub-adapters).
 
 Checks that need an OLM-managed or platform-managed install are deliberately
 absent, because the harness cannot provide one: the `odh-trustyai-config` and
